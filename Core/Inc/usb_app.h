@@ -14,6 +14,8 @@ bool usb_app_mouse_report(uint8_t buttons, int8_t delta_x, int8_t delta_y, int8_
 bool usb_app_midi_send_packet(uint8_t const packet[4]);
 bool usb_app_midi_send_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 bool usb_app_midi_send_note_off(uint8_t channel, uint8_t note);
+bool usb_app_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
+void usb_app_cdc_printf(const char *format, ...);
 
 #ifdef __cplusplus
 }

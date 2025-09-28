@@ -1,11 +1,15 @@
 #include "usb_app.h"
 
 #include "tusb.h"
+#include "class/hid/hid.h"
+#include "class/hid/hid_device.h"
 
 #include "stm32g4xx_hal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <stdarg.h>
 #include <stddef.h>
 
 #define HID_QUEUE_SIZE     64U
@@ -389,6 +393,17 @@ bool usb_app_midi_send_note_off(uint8_t channel, uint8_t note)
 	return midi_write_packet(packet);
 }
 
+bool usb_app_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value)
+{
+	if (channel > 15U)
+	{
+		return false;
+	}
+
+	uint8_t const packet[4] = { 0x0B, (uint8_t) (0xB0U | (channel & 0x0FU)), controller, value };
+	return midi_write_packet(packet);
+}
+
 //--------------------------------------------------------------------+
 // TinyUSB callbacks
 //--------------------------------------------------------------------+
@@ -425,6 +440,24 @@ static bool midi_write_packet(uint8_t const packet[4])
 	}
 
 	return tud_midi_packet_write(packet);
+}
+
+//--------------------------------------------------------------------+
+// Public helpers
+//--------------------------------------------------------------------+
+
+void usb_app_cdc_printf(const char *format, ...)
+{
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    int len = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    if (len > 0)
+    {
+        tud_cdc_write(buffer, (uint32_t)len);
+        tud_cdc_write_flush();
+    }
 }
 
 void tud_resume_cb(void)

@@ -55,10 +55,18 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/matrix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/encoder.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/key_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/keymap.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/midi_handler.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c_manager.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc/input
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/common
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/device

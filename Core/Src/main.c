@@ -18,33 +18,35 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "gpio.h"
 #include "usb_app.h"
+#include "input/matrix.h"
+#include "input/encoder.h"
+#include "key_state.h"
+#include "op_keycodes.h"
+#include "pin_config.h"
+#include "i2c.h"
+#include "i2c_manager.h"
+#include "tusb.h"
 #ifndef USB_DEMO_ENABLE_MOUSE
-#define USB_DEMO_ENABLE_MOUSE 1
+#define USB_DEMO_ENABLE_MOUSE 0
 #endif
 #ifndef USB_DEMO_ENABLE_MIDI
-#define USB_DEMO_ENABLE_MIDI 1
+#define USB_DEMO_ENABLE_MIDI 0
 #endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#if USB_DEMO_ENABLE_MIDI
-typedef enum
-{
-  MIDI_DEMO_IDLE = 0,
-  MIDI_DEMO_NOTE_ON
-} midi_demo_state_t;
-#endif
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,7 +54,33 @@ typedef enum
 
 /* USER CODE END PM */
 
+/* Private variables ---------------------------------------------------------*/
+
 /* USER CODE BEGIN PV */
+static uint8_t is_usb_connected = 0;
+static uint32_t last_usb_check = 0;
+#define USB_CHECK_INTERVAL_MS 1000
+
+#ifndef FORCE_SLAVE_MODE
+#define FORCE_SLAVE_MODE 0
+#endif
+
+/* Matrix event callback (file scope) */
+static void matrix_cb(uint8_t row, uint8_t col, uint8_t pressed, uint8_t keycode)
+{
+  // Debug output for key detection
+  usb_app_cdc_printf("Key %s: row=%d, col=%d, keycode=0x%02X\r\n", 
+               pressed ? "PRESSED" : "RELEASED", row, col, keycode);
+  
+  (void)row; (void)col; // unused in this simple handler
+  if (keycode == 0) return;
+
+  i2c_manager_process_local_key_event(row, col, pressed, keycode);
+}
+
+
+
+
 
 /* USER CODE END PV */
 
@@ -96,8 +124,25 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   usb_app_init();
+  key_state_init();
+  encoder_init();
+  matrix_init();
+  i2c_manager_init();
+  
+  // Initial USB connection check to set I2C mode
+#if FORCE_SLAVE_MODE
+  is_usb_connected = 0; // Force slave mode
+  usb_app_cdc_printf("FORCED SLAVE MODE - I2C address will be 0x42\r\n");
+#else
+  is_usb_connected = tud_connected();
+#endif
+  i2c_manager_set_mode(is_usb_connected);
+  
+  matrix_register_callback(matrix_cb);
+  usb_app_cdc_printf("TinyUSB composite with keyboard initialized\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,9 +153,35 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     usb_app_task();
+    matrix_scan();
+    encoder_task();
+  key_state_task();
+    
+    // Check USB connection status periodically for master/slave switching
+    uint32_t now = HAL_GetTick();
+    if ((now - last_usb_check) >= USB_CHECK_INTERVAL_MS) {
+      last_usb_check = now;
+#if FORCE_SLAVE_MODE
+      uint8_t usb_connected = 0; // Always force slave mode
+#else
+      uint8_t usb_connected = tud_connected();
+#endif
+      if (usb_connected != is_usb_connected) {
+        is_usb_connected = usb_connected;
+        i2c_manager_set_mode(is_usb_connected);
+        usb_app_cdc_printf("USB %s, switching to %s mode\r\n", 
+                     is_usb_connected ? "connected" : "disconnected",
+                     is_usb_connected ? "master" : "slave");
+      }
+      
+
+    }
+    
+    // Additional I2C task processing
+    i2c_manager_task();
 
 #if USB_DEMO_ENABLE_MOUSE || USB_DEMO_ENABLE_MIDI
-    uint32_t now = HAL_GetTick();
+    // USB demo code here if enabled
 #endif
 
 #if USB_DEMO_ENABLE_MOUSE
@@ -124,6 +195,12 @@ int main(void)
 #endif
 
 #if USB_DEMO_ENABLE_MIDI
+    typedef enum
+    {
+      MIDI_DEMO_IDLE = 0,
+      MIDI_DEMO_NOTE_ON
+    } midi_demo_state_t;
+
     static midi_demo_state_t midi_demo_state = MIDI_DEMO_IDLE;
     static uint32_t midi_demo_tick = 0U;
 
@@ -227,6 +304,36 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 }
+
+/* USER CODE BEGIN 4 */
+
+// I2C slave callbacks - redirect to I2C manager
+void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode)
+{
+  i2c_manager_addr_callback(hi2c, TransferDirection, AddrMatchCode);
+}
+
+void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_slave_rx_complete_callback(hi2c);
+}
+
+void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_slave_tx_complete_callback(hi2c);
+}
+
+void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_listen_complete_callback(hi2c);
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_error_callback(hi2c);
+}
+
+/* USER CODE END 4 */
 
 /* USER CODE BEGIN 4 */
 
