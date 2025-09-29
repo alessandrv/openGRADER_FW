@@ -31,6 +31,7 @@ typedef struct {
 // Public API
 bool eeprom_init(void);
 bool eeprom_save_config(void);
+bool eeprom_force_save_config(void);  // Force save even if no changes
 bool eeprom_load_config(void);
 bool eeprom_reset_config(void);
 bool eeprom_is_valid(void);

@@ -3,6 +3,9 @@
 #include "pin_config.h"
 #include "eeprom_emulation.h"
 
+// EEPROM initialization flag
+static bool keymap_initialized = false;
+
 // Matrix pin configuration from pin_config.h
 const pin_t matrix_cols[MATRIX_COLS] = MATRIX_COL_PINS;
 const pin_t matrix_rows[MATRIX_ROWS] = MATRIX_ROW_PINS;
@@ -53,9 +56,27 @@ const uint16_t encoder_map[ENCODER_COUNT][2] = {
     { KC_GRV, KC_COMM }   // grave, comma
 };
 
+// Initialize keymap system
+void keymap_init(void)
+{
+    if (!keymap_initialized) {
+        // Initialize EEPROM emulation
+        if (!eeprom_init()) {
+            // EEPROM init failed, but we can still use defaults
+            // This will be logged in eeprom_init()
+        }
+        keymap_initialized = true;
+    }
+}
+
 uint16_t keymap_get_keycode(uint8_t row, uint8_t col)
 {
     if (row >= MATRIX_ROWS || col >= MATRIX_COLS) return KC_NO;
+    
+    // Ensure keymap is initialized
+    if (!keymap_initialized) {
+        keymap_init();
+    }
     
     // Try to get from EEPROM first, fallback to default if not available
     uint16_t eeprom_keycode = eeprom_get_keycode(row, col);
@@ -68,6 +89,12 @@ uint16_t keymap_get_keycode(uint8_t row, uint8_t col)
 
 bool keymap_set_keycode(uint8_t row, uint8_t col, uint16_t keycode)
 {
+    // Ensure keymap is initialized
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+    
+    // Set the keycode in EEPROM (but don't auto-save yet)
     return eeprom_set_keycode(row, col, keycode);
 }
 
@@ -75,6 +102,11 @@ bool keymap_get_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t 
 {
     if (encoder_id >= ENCODER_COUNT || !ccw_keycode || !cw_keycode) {
         return false;
+    }
+    
+    // Ensure keymap is initialized
+    if (!keymap_initialized) {
+        keymap_init();
     }
     
     // Try to get from EEPROM first, fallback to default if not available
@@ -90,5 +122,11 @@ bool keymap_get_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t 
 
 bool keymap_set_encoder_map(uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
 {
+    // Ensure keymap is initialized
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+    
+    // Set the encoder map in EEPROM (but don't auto-save yet)
     return eeprom_set_encoder_map(encoder_id, ccw_keycode, cw_keycode);
 }

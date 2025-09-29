@@ -24,6 +24,10 @@ static void handle_get_encoder_map(const config_packet_t *request, config_packet
 static void handle_set_encoder_map(const config_packet_t *request, config_packet_t *response);
 static void handle_get_i2c_devices(config_packet_t *response);
 static void handle_get_device_status(config_packet_t *response);
+static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response);
+static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response);
+static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response);
+static void handle_midi_cc(const config_packet_t *request, config_packet_t *response);
 
 // Public functions
 void config_protocol_init(void)
@@ -50,7 +54,8 @@ void config_protocol_init(void)
         tx_packet.payload[i] = 0;
     }
     
-    // Initialize EEPROM emulation
+    // Initialize EEPROM emulation and keymap system
+    keymap_init();
     if (!eeprom_init()) {
         usb_app_cdc_printf("Config: EEPROM initialization failed\r\n");
     }
@@ -142,11 +147,28 @@ bool config_protocol_process_packet(const config_packet_t *packet)
         case CMD_GET_DEVICE_STATUS:
             handle_get_device_status(&tx_packet);
             break;
+
+        case CMD_MIDI_SEND_RAW:
+            handle_midi_send_raw(packet, &tx_packet);
+            break;
+
+        case CMD_MIDI_NOTE_ON:
+            handle_midi_note_on(packet, &tx_packet);
+            break;
+
+        case CMD_MIDI_NOTE_OFF:
+            handle_midi_note_off(packet, &tx_packet);
+            break;
+
+        case CMD_MIDI_CC:
+            handle_midi_cc(packet, &tx_packet);
+            break;
             
         case CMD_SAVE_CONFIG:
-            if (eeprom_save_config()) {
+            // Use force save for explicit user save requests
+            if (eeprom_force_save_config()) {
                 tx_packet.status = STATUS_OK;
-                usb_app_cdc_printf("Config: Configuration saved to EEPROM\r\n");
+                usb_app_cdc_printf("Config: Configuration force-saved to EEPROM\r\n");
             } else {
                 tx_packet.status = STATUS_ERROR;
                 usb_app_cdc_printf("Config: Failed to save configuration\r\n");
@@ -362,4 +384,74 @@ static void handle_get_device_status(config_packet_t *response)
     response->payload_length = 1;
     
     usb_app_cdc_printf("Config: Get device status\r\n");
+}
+
+static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 4) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t packet[4];
+    for (int i = 0; i < 4; i++) packet[i] = request->payload[i];
+
+    if (usb_app_midi_send_packet(packet)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+}
+
+static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 3) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t channel = request->payload[0];
+    uint8_t note = request->payload[1];
+    uint8_t velocity = request->payload[2];
+
+    if (usb_app_midi_send_note_on(channel, note, velocity)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+}
+
+static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t channel = request->payload[0];
+    uint8_t note = request->payload[1];
+
+    if (usb_app_midi_send_note_off(channel, note)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+}
+
+static void handle_midi_cc(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 3) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t channel = request->payload[0];
+    uint8_t controller = request->payload[1];
+    uint8_t value = request->payload[2];
+
+    if (usb_app_midi_send_cc(channel, controller, value)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
 }

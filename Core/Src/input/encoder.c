@@ -170,7 +170,14 @@ void encoder_task(void)
 	// 2) Process encoder events - either via callback (slave) or immediate HID (master)
 	enc_event_t ev;
 	if (q_pop(&ev)) {
-		uint16_t keycode = encoder_map[ev.idx][(ev.dir == ENC_CW) ? 1 : 0];
+		// Get current encoder mapping (from EEPROM if available, otherwise defaults)
+		uint16_t ccw_keycode, cw_keycode;
+		if (!keymap_get_encoder_map(ev.idx, &ccw_keycode, &cw_keycode)) {
+			usb_app_cdc_printf("Error: Failed to get encoder[%d] mapping\r\n", ev.idx);
+			return;
+		}
+		
+		uint16_t keycode = (ev.dir == ENC_CW) ? cw_keycode : ccw_keycode;
 		usb_app_cdc_printf("Processing encoder event: idx=%d, dir=%s, keycode=0x%04X\r\n", 
 		             ev.idx, (ev.dir == ENC_CW) ? "CW" : "CCW", keycode);
 		

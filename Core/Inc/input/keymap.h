@@ -16,6 +16,9 @@ extern const uint32_t matrix_row_pulls[MATRIX_ROWS];
 // Simple keycode map (rows x cols). Use OpenGrader keycodes; KC_NO = no key.
 extern const uint16_t keycodes[MATRIX_ROWS][MATRIX_COLS];
 
+// Initialize keymap system
+void keymap_init(void);
+
 // helper functions
 uint16_t keymap_get_keycode(uint8_t row, uint8_t col);
 bool keymap_set_keycode(uint8_t row, uint8_t col, uint16_t keycode);

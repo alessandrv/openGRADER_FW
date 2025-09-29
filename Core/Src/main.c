@@ -25,6 +25,7 @@
 #include "usb_app.h"
 #include "input/matrix.h"
 #include "input/encoder.h"
+#include "input/keymap.h"
 #include "key_state.h"
 #include "op_keycodes.h"
 #include "pin_config.h"
@@ -131,6 +132,9 @@ int main(void)
   encoder_init();
   matrix_init();
   i2c_manager_init();
+  
+  // Initialize keymap and EEPROM after I2C is set up
+  keymap_init();
   
   // Initial USB connection check to set I2C mode
 #if FORCE_SLAVE_MODE
