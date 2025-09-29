@@ -1,6 +1,7 @@
 #include "keymap.h"
 #include "op_keycodes.h"
 #include "pin_config.h"
+#include "eeprom_emulation.h"
 
 // Matrix pin configuration from pin_config.h
 const pin_t matrix_cols[MATRIX_COLS] = MATRIX_COL_PINS;
@@ -55,5 +56,39 @@ const uint16_t encoder_map[ENCODER_COUNT][2] = {
 uint16_t keymap_get_keycode(uint8_t row, uint8_t col)
 {
     if (row >= MATRIX_ROWS || col >= MATRIX_COLS) return KC_NO;
+    
+    // Try to get from EEPROM first, fallback to default if not available
+    uint16_t eeprom_keycode = eeprom_get_keycode(row, col);
+    if (eeprom_keycode != 0) {
+        return eeprom_keycode;
+    }
+    
     return keycodes[row][col];
+}
+
+bool keymap_set_keycode(uint8_t row, uint8_t col, uint16_t keycode)
+{
+    return eeprom_set_keycode(row, col, keycode);
+}
+
+bool keymap_get_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
+{
+    if (encoder_id >= ENCODER_COUNT || !ccw_keycode || !cw_keycode) {
+        return false;
+    }
+    
+    // Try to get from EEPROM first, fallback to default if not available
+    if (eeprom_get_encoder_map(encoder_id, ccw_keycode, cw_keycode)) {
+        return true;
+    }
+    
+    // Fallback to default
+    *ccw_keycode = encoder_map[encoder_id][0];
+    *cw_keycode = encoder_map[encoder_id][1];
+    return true;
+}
+
+bool keymap_set_encoder_map(uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
+{
+    return eeprom_set_encoder_map(encoder_id, ccw_keycode, cw_keycode);
 }

@@ -2,6 +2,7 @@
 #define KEYMAP_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "input/matrix.h"
 #include "op_keycodes.h"
 
@@ -15,8 +16,13 @@ extern const uint32_t matrix_row_pulls[MATRIX_ROWS];
 // Simple keycode map (rows x cols). Use OpenGrader keycodes; KC_NO = no key.
 extern const uint16_t keycodes[MATRIX_ROWS][MATRIX_COLS];
 
-// helper
+// helper functions
 uint16_t keymap_get_keycode(uint8_t row, uint8_t col);
+bool keymap_set_keycode(uint8_t row, uint8_t col, uint16_t keycode);
+
+// Encoder helper functions
+bool keymap_get_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
+bool keymap_set_encoder_map(uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
 
 // Encoders configuration
 #ifndef ENCODER_COUNT

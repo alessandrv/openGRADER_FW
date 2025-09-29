@@ -1,5 +1,6 @@
 #include "tusb.h"
-
+#include "class/hid/hid.h"
+#include "device/usbd.h"
 #include <string.h>
 
 #define USB_VID  0xCafe
@@ -12,6 +13,7 @@ enum
 	ITF_NUM_CDC_DATA,
 	ITF_NUM_HID_KEYBOARD,
 	ITF_NUM_HID_MOUSE,
+	ITF_NUM_HID_CONFIG,     // Custom configuration HID interface
 	ITF_NUM_MIDI_CONTROL,
 	ITF_NUM_MIDI_STREAMING,
 	ITF_NUM_TOTAL
@@ -22,6 +24,8 @@ enum
 #define EPNUM_CDC_IN      0x82
 #define EPNUM_HID_KEYBOARD_IN 0x83
 #define EPNUM_HID_MOUSE_IN    0x84
+#define EPNUM_HID_CONFIG_OUT  0x06
+#define EPNUM_HID_CONFIG_IN   0x86
 #define EPNUM_MIDI_OUT        0x05
 #define EPNUM_MIDI_IN         0x85
 
@@ -34,10 +38,11 @@ enum
 	STRID_CDC,
 	STRID_KEYBOARD,
 	STRID_MOUSE,
+	STRID_CONFIG,
 	STRID_MIDI,
 };
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_MIDI_DESC_LEN)
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_INOUT_DESC_LEN + TUD_MIDI_DESC_LEN)
 
 //--------------------------------------------------------------------+
 // HID Report Descriptor
@@ -51,6 +56,12 @@ static uint8_t const desc_hid_report_keyboard[] =
 static uint8_t const desc_hid_report_mouse[] =
 {
 	TUD_HID_REPORT_DESC_MOUSE()
+};
+
+// Custom HID report descriptor for configuration interface
+static uint8_t const desc_hid_report_config[] =
+{
+	TUD_HID_REPORT_DESC_GENERIC_INOUT(64)
 };
 
 //--------------------------------------------------------------------+
@@ -93,6 +104,7 @@ uint8_t const desc_configuration[] =
 	TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 16, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 	TUD_HID_DESCRIPTOR(ITF_NUM_HID_KEYBOARD, STRID_KEYBOARD, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_report_keyboard), EPNUM_HID_KEYBOARD_IN, CFG_TUD_HID_EP_BUFSIZE, CFG_TUD_HID_POLL_INTERVAL),
 	TUD_HID_DESCRIPTOR(ITF_NUM_HID_MOUSE, STRID_MOUSE, HID_ITF_PROTOCOL_MOUSE, sizeof(desc_hid_report_mouse), EPNUM_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, CFG_TUD_HID_POLL_INTERVAL),
+	TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID_CONFIG, STRID_CONFIG, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_config), EPNUM_HID_CONFIG_OUT, EPNUM_HID_CONFIG_IN, 64, CFG_TUD_HID_POLL_INTERVAL),
 	TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI_CONTROL, STRID_MIDI, EPNUM_MIDI_OUT, EPNUM_MIDI_IN, CFG_TUD_MIDI_EP_BUFSIZE)
 };
 
@@ -110,12 +122,13 @@ static char const *string_desc_arr[] =
 {
 	[STRID_LANGID]      = "\x09\x04",                   // 0: English (0x0409)
 	[STRID_MANUFACTURER] = "OpenGrader Labs",            // 1: Manufacturer
-	[STRID_PRODUCT]      = "TinyUSB CDC+Keyboard+Mouse+MIDI", // 2: Product
+	[STRID_PRODUCT]      = "OpenGrader Modular Keyboard", // 2: Product
 	[STRID_SERIAL]       = "0001",                      // 3: Serial
 	[STRID_CDC]          = "Virtual COM",               // 4: CDC Interface
 	[STRID_KEYBOARD]     = "Keyboard",                  // 5: Keyboard HID Interface
 	[STRID_MOUSE]        = "Mouse",                     // 6: Mouse HID Interface
-	[STRID_MIDI]         = "MIDI Port"                  // 7: MIDI Interface
+	[STRID_CONFIG]       = "Configuration Interface",  // 7: Config HID Interface
+	[STRID_MIDI]         = "MIDI Port"                  // 8: MIDI Interface
 };
 
 static uint16_t _desc_str[32];
@@ -163,6 +176,8 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 		return desc_hid_report_keyboard;
 	case 1:
 		return desc_hid_report_mouse;
+	case 2:
+		return desc_hid_report_config;
 	default:
 		return NULL;
 	}

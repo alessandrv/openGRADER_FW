@@ -3,6 +3,9 @@
 #include "tusb.h"
 #include "class/hid/hid.h"
 #include "class/hid/hid_device.h"
+#include "class/cdc/cdc_device.h"
+#include "class/midi/midi_device.h"
+#include "config_protocol.h"
 
 #include "stm32g4xx_hal.h"
 
@@ -10,7 +13,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
-#include <stddef.h>
+#include <stdio.h>
 
 #define HID_QUEUE_SIZE     64U
 #define HID_QUEUE_MASK     (HID_QUEUE_SIZE - 1U)
@@ -45,6 +48,7 @@ void usb_app_init(void)
 #endif
 
 	tusb_init();
+	config_protocol_init();
 }
 
 void usb_app_task(void)
@@ -53,6 +57,7 @@ void usb_app_task(void)
 	cdc_task();
 	hid_task();
 	midi_task();
+	config_protocol_task();
 }
 
 //--------------------------------------------------------------------+
@@ -476,9 +481,17 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize)
 {
-	(void) instance;
 	(void) report_id;
 	(void) report_type;
+	
+	// Handle config interface (instance 2)
+	if (instance == 2) {
+		config_protocol_hid_receive(buffer, bufsize);
+		return;
+	}
+	
+	// Other instances not handled
+	(void) instance;
 	(void) buffer;
 	(void) bufsize;
 }

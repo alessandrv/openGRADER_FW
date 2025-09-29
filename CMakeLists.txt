@@ -61,6 +61,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/keymap.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/midi_handler.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c_manager.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/config_protocol.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/eeprom_emulation.c
 )
 
 # Add include paths
