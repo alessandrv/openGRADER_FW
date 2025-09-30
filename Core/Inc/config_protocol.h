@@ -29,13 +29,18 @@ typedef enum {
     CMD_GET_I2C_DEVICES = 0x09,    // Get connected I2C devices
     CMD_SET_I2C_CONFIG = 0x0A,     // Configure I2C device
     CMD_GET_DEVICE_STATUS = 0x0B,  // Get device status
-    CMD_REBOOT = 0x0C              // Reboot device (fixed to match Tauri)
-    ,
+    CMD_REBOOT = 0x0C,             // Reboot device (fixed to match Tauri)
+    
     // MIDI commands
-    CMD_MIDI_SEND_RAW = 0x0D,     // Send raw 4-byte USB-MIDI packet (payload: 4 bytes)
-    CMD_MIDI_NOTE_ON = 0x0E,      // Send MIDI Note On (payload: channel(1), note(1), velocity(1))
-    CMD_MIDI_NOTE_OFF = 0x0F,     // Send MIDI Note Off (payload: channel(1), note(1))
-    CMD_MIDI_CC = 0x10            // Send MIDI Control Change (payload: channel(1), controller(1), value(1))
+    CMD_MIDI_SEND_RAW = 0x0D,      // Send raw 4-byte USB-MIDI packet (payload: 4 bytes)
+    CMD_MIDI_NOTE_ON = 0x0E,       // Send MIDI Note On (payload: channel(1), note(1), velocity(1))
+    CMD_MIDI_NOTE_OFF = 0x0F,      // Send MIDI Note Off (payload: channel(1), note(1))
+    CMD_MIDI_CC = 0x10,            // Send MIDI Control Change (payload: channel(1), controller(1), value(1))
+    
+    // Slave device commands
+    CMD_GET_SLAVE_KEYMAP = 0x11,   // Get keymap from slave device (payload: address(1), row(1), col(1))
+    CMD_SET_SLAVE_KEYMAP = 0x12,   // Set keymap on slave device (payload: address(1), row(1), col(1), keycode(2))
+    CMD_GET_SLAVE_INFO = 0x13      // Get detailed info from slave device (payload: address(1))
 } config_command_t;
 
 // Response status codes

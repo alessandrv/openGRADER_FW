@@ -32,8 +32,8 @@ extern I2C_HandleTypeDef hi2c2;
 static uint8_t current_i2c_mode = 0xFF; // 0xFF = uninitialized, 0 = slave, 1 = master
 static uint32_t last_slave_scan = 0;
 #define SLAVE_SCAN_INTERVAL_MS 500
-static uint8_t detected_slaves[16]; // Track detected slave addresses
-static uint8_t detected_slave_count = 0;
+uint8_t detected_slaves[16]; // Track detected slave addresses
+uint8_t detected_slave_count = 0;
 
 /* I2C Event FIFO Queue for handling multiple simultaneous key events */
 static i2c_message_t i2c_event_fifo[I2C_EVENT_FIFO_SIZE];
@@ -403,20 +403,31 @@ uint8_t i2c_manager_get_mode(void)
 /* I2C master: scan for available slaves */
 void i2c_manager_scan_slaves(void)
 {
+    usb_app_cdc_printf("I2C: i2c_manager_scan_slaves called\r\n");
+    HAL_Delay(10);
     uint32_t now = HAL_GetTick();
     if ((now - last_slave_scan) < SLAVE_SCAN_INTERVAL_MS) {
+        usb_app_cdc_printf("I2C: Skipping scan, not time yet\r\n");
+        HAL_Delay(10);
         return; // Not time to scan yet
     }
     
     last_slave_scan = now;
     detected_slave_count = 0;
     
-    usb_app_cdc_printf("I2C: Starting slave scan...\r\n");
+    if (current_i2c_mode != 1) {
+        usb_app_cdc_printf("I2C: Cannot scan slaves - not in master mode (mode=%d)\r\n", current_i2c_mode);
+        HAL_Delay(10);
+        return;
+    }
+    
+    HAL_Delay(10);
     
     // Scan I2C address range (0x08 to 0x77 are valid 7-bit addresses)
     for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
         // Quick ping to see if device responds
-        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, addr << 1, 1, 10);
+        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, addr << 1, 1, 50);
+        HAL_Delay(20);
         
         if (status == HAL_OK) {
             // Device found
@@ -424,15 +435,13 @@ void i2c_manager_scan_slaves(void)
                 detected_slaves[detected_slave_count] = addr;
                 detected_slave_count++;
             }
-            usb_app_cdc_printf("I2C: Found slave at address 0x%02X\r\n", addr);
+            HAL_Delay(20);
         }
     }
     
     if (detected_slave_count == 0) {
         usb_app_cdc_printf("I2C: No slaves detected\r\n");
-    } else {
-        usb_app_cdc_printf("I2C: Total %d slaves detected\r\n", detected_slave_count);
-    }
+    } 
 }
 
 void i2c_manager_task(void)

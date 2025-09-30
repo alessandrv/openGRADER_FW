@@ -2,6 +2,7 @@
 #include "usb_app.h"
 #include "input/keymap.h"
 #include "i2c_manager.h"
+#include "i2c.h"  // Added to include hi2c2 declaration
 #include "pin_config.h"
 #include "eeprom_emulation.h"
 #include "tusb.h"
@@ -28,6 +29,193 @@ static void handle_midi_send_raw(const config_packet_t *request, config_packet_t
 static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_cc(const config_packet_t *request, config_packet_t *response);
+static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode);
+static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode);
+static void handle_get_slave_keymap(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 3) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+    
+    uint8_t slave_addr = request->payload[0];
+    uint8_t row = request->payload[1];
+    uint8_t col = request->payload[2];
+    
+    // Check if we're in master mode
+    if (i2c_manager_get_mode() != 1) {
+        response->status = STATUS_ERROR;
+        usb_app_cdc_printf("Config: Cannot get slave keymap - not in master mode\r\n");
+        return;
+    }
+    
+    // Create keymap entry structure in response
+    keymap_entry_t *entry = (keymap_entry_t*)response->payload;
+    entry->row = row;
+    entry->col = col;
+    entry->keycode = 0; // Default value if request fails
+    
+    // Request keymap from slave
+    uint16_t keycode = 0;
+    if (request_keymap_from_slave(slave_addr, row, col, &keycode)) {
+        entry->keycode = keycode;
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+    
+    response->payload_length = sizeof(keymap_entry_t);
+    
+    usb_app_cdc_printf("Config: Get slave keymap [%02X,%d,%d] = 0x%04X\r\n", 
+                 slave_addr, row, col, entry->keycode);
+}
+
+static void handle_set_slave_keymap(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < sizeof(keymap_entry_t) + 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+    
+    uint8_t slave_addr = request->payload[0];
+    const keymap_entry_t *entry = (const keymap_entry_t*)(request->payload + 1);
+    
+    // Check if we're in master mode
+    if (i2c_manager_get_mode() != 1) {
+        response->status = STATUS_ERROR;
+        usb_app_cdc_printf("Config: Cannot set slave keymap - not in master mode\r\n");
+        return;
+    }
+    
+    // Send keymap to slave
+    if (send_keymap_to_slave(slave_addr, entry->row, entry->col, entry->keycode)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+    
+    usb_app_cdc_printf("Config: Set slave keymap [%02X,%d,%d] = 0x%04X\r\n", 
+                 slave_addr, entry->row, entry->col, entry->keycode);
+}
+
+static void handle_get_slave_info(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+    
+    uint8_t slave_addr = request->payload[0];
+    
+    // Check if we're in master mode
+    if (i2c_manager_get_mode() != 1) {
+        response->status = STATUS_ERROR;
+        usb_app_cdc_printf("Config: Cannot get slave info - not in master mode\r\n");
+        return;
+    }
+    
+    // For now, just return basic info about the slave
+    // In a more complete implementation, we would query the slave for its info
+    device_info_t *info = (device_info_t*)response->payload;
+    
+    info->protocol_version = CONFIG_PROTOCOL_VERSION;
+    info->firmware_version_major = 1;
+    info->firmware_version_minor = 0;
+    info->firmware_version_patch = 0;
+    info->device_type = 0; // 0=Slave
+    info->matrix_rows = MATRIX_ROWS; // Assuming same matrix size as master
+    info->matrix_cols = MATRIX_COLS;
+    info->encoder_count = 0; // Assuming no encoders on slave
+    info->i2c_devices = 0; // Slaves don't have I2C devices
+    
+    // Set default name
+    char name[16];
+    sprintf(name, "Slave %02X", slave_addr);
+    memcpy(info->device_name, name, 16);
+    
+    response->payload_length = sizeof(device_info_t);
+    response->status = STATUS_OK;
+    
+    usb_app_cdc_printf("Config: Get slave info for device 0x%02X\r\n", slave_addr);
+}
+
+// Helper functions for I2C communication with slaves
+static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode)
+{
+    uint8_t tx_data[4] = {
+        CMD_GET_KEYMAP,  // Command to get keymap
+        row,             // Row
+        col,             // Column
+        0                // Padding
+    };
+    uint8_t rx_data[4] = {0};
+    
+    // Send request to slave and get response
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("I2C: Failed to send keymap request to slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    // Wait a bit for slave to process
+    HAL_Delay(5);
+    
+    // Receive response
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("I2C: Failed to receive keymap from slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    // Check if response is valid
+    if (rx_data[0] != CMD_GET_KEYMAP) {
+        usb_app_cdc_printf("I2C: Invalid response from slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    // Extract keycode (little endian)
+    *keycode = rx_data[1] | (rx_data[2] << 8);
+    
+    usb_app_cdc_printf("I2C: Got keymap from slave 0x%02X [%d,%d] = 0x%04X\r\n", 
+                 slave_addr, row, col, *keycode);
+    return true;
+}
+
+static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode)
+{
+    uint8_t tx_data[6] = {
+        CMD_SET_KEYMAP,      // Command to set keymap
+        row,                 // Row
+        col,                 // Column
+        keycode & 0xFF,      // Keycode (low byte)
+        (keycode >> 8) & 0xFF, // Keycode (high byte)
+        0                    // Padding
+    };
+    uint8_t rx_data[2] = {0};
+    
+    // Send request to slave
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("I2C: Failed to send keymap to slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    // Wait a bit for slave to process
+    HAL_Delay(5);
+    
+    // Receive response (status)
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("I2C: Failed to receive status from slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    // Check if response is valid
+    if (rx_data[0] != CMD_SET_KEYMAP || rx_data[1] != STATUS_OK) {
+        usb_app_cdc_printf("I2C: Invalid response from slave 0x%02X\r\n", slave_addr);
+        return false;
+    }
+    
+    usb_app_cdc_printf("I2C: Set keymap on slave 0x%02X [%d,%d] = 0x%04X\r\n", 
+                 slave_addr, row, col, keycode);
+    return true;
+}
 
 // Public functions
 void config_protocol_init(void)
@@ -78,7 +266,6 @@ void config_protocol_task(void)
     if (packet_pending && tud_hid_n_ready(2)) {
         if (tud_hid_n_report(2, 0, &tx_packet, sizeof(tx_packet))) {
             packet_pending = false;
-            usb_app_cdc_printf("Config: Response sent\r\n");
         }
     }
 }
@@ -87,21 +274,12 @@ bool config_protocol_process_packet(const config_packet_t *packet)
 {
     // Read header from raw bytes to ensure correct interpretation
     uint8_t *raw_bytes = (uint8_t*)packet;
-    
-    usb_app_cdc_printf("Config: Raw bytes: [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]\r\n", 
-                 raw_bytes[0], raw_bytes[1], raw_bytes[2], raw_bytes[3], 
-                 raw_bytes[4], raw_bytes[5], raw_bytes[6], raw_bytes[7]);
+   
     
     // Read header as little-endian from raw bytes
     uint16_t received_header = raw_bytes[0] | (raw_bytes[1] << 8);
     
-    usb_app_cdc_printf("Config: Header=0x%04X Cmd=0x%02X Status=0x%02X Seq=0x%02X Len=%d\r\n",
-                       received_header, raw_bytes[2], raw_bytes[3], raw_bytes[4], raw_bytes[5]);
-    
-    if (received_header != CONFIG_PACKET_HEADER) {
-        usb_app_cdc_printf("Config: Invalid header 0x%04X (expected 0x%04X)\r\n", received_header, CONFIG_PACKET_HEADER);
-        return false;
-    }
+   
     
     // Prepare response packet
     tx_packet.header = CONFIG_PACKET_HEADER;
@@ -117,7 +295,6 @@ bool config_protocol_process_packet(const config_packet_t *packet)
         tx_packet.payload[i] = 0;
     }
     
-    usb_app_cdc_printf("Config: Processing command 0x%02X\r\n", packet->command);
     
     switch (packet->command) {
         case CMD_GET_INFO:
@@ -162,6 +339,18 @@ bool config_protocol_process_packet(const config_packet_t *packet)
 
         case CMD_MIDI_CC:
             handle_midi_cc(packet, &tx_packet);
+            break;
+            
+        case CMD_GET_SLAVE_KEYMAP:
+            handle_get_slave_keymap(packet, &tx_packet);
+            break;
+            
+        case CMD_SET_SLAVE_KEYMAP:
+            handle_set_slave_keymap(packet, &tx_packet);
+            break;
+            
+        case CMD_GET_SLAVE_INFO:
+            handle_get_slave_info(packet, &tx_packet);
             break;
             
         case CMD_SAVE_CONFIG:
@@ -223,7 +412,6 @@ void config_protocol_hid_receive(uint8_t const* buffer, uint16_t bufsize)
     }
     packet_received = true;
     
-    usb_app_cdc_printf("Config: Packet received, cmd=0x%02X\r\n", rx_packet.command);
 }
 
 bool config_protocol_hid_ready(void)
@@ -234,6 +422,7 @@ bool config_protocol_hid_ready(void)
 // Private command handlers
 static void handle_get_info(config_packet_t *response)
 {
+    extern uint8_t detected_slave_count;
     device_info_t *info = (device_info_t*)response->payload;
     
     info->protocol_version = CONFIG_PROTOCOL_VERSION;
@@ -244,7 +433,7 @@ static void handle_get_info(config_packet_t *response)
     info->matrix_rows = MATRIX_ROWS;
     info->matrix_cols = MATRIX_COLS;
     info->encoder_count = ENCODER_COUNT;
-    info->i2c_devices = 0; // TODO: Get actual count
+    info->i2c_devices = detected_slave_count; // Return actual count of detected slaves
     // Copy device name manually
     const char name[] = "OpenGrader Modular";
     int name_len = 0;
@@ -256,8 +445,8 @@ static void handle_get_info(config_packet_t *response)
     
     response->payload_length = sizeof(device_info_t);
     
-    usb_app_cdc_printf("Config: Device info - Type:%d, Matrix:%dx%d, Encoders:%d\r\n",
-                 info->device_type, info->matrix_rows, info->matrix_cols, info->encoder_count);
+    usb_app_cdc_printf("Config: Device info - Type:%d, Matrix:%dx%d, Encoders:%d, I2C:%d\r\n",
+                 info->device_type, info->matrix_rows, info->matrix_cols, info->encoder_count, info->i2c_devices);
 }
 
 static void handle_get_keymap(const config_packet_t *request, config_packet_t *response)
@@ -282,7 +471,6 @@ static void handle_get_keymap(const config_packet_t *request, config_packet_t *r
     
     response->payload_length = sizeof(keymap_entry_t);
     
-    usb_app_cdc_printf("Config: Get keymap [%d,%d] = 0x%04X\r\n", row, col, entry->keycode);
 }
 
 static void handle_set_keymap(const config_packet_t *request, config_packet_t *response)
@@ -338,9 +526,7 @@ static void handle_get_encoder_map(const config_packet_t *request, config_packet
     entry->reserved = 0;
     
     response->payload_length = sizeof(encoder_entry_t);
-    
-    usb_app_cdc_printf("Config: Get encoder %d = CCW:0x%04X CW:0x%04X\r\n", 
-                 encoder_id, entry->ccw_keycode, entry->cw_keycode);
+   
 }
 
 static void handle_set_encoder_map(const config_packet_t *request, config_packet_t *response)
@@ -370,11 +556,34 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
 
 static void handle_get_i2c_devices(config_packet_t *response)
 {
-    // TODO: Implement I2C device scanning
-    response->payload[0] = 0; // Device count
-    response->payload_length = 1;
-    
-    usb_app_cdc_printf("Config: Get I2C devices (not implemented)\r\n");
+    extern uint8_t detected_slaves[16];
+    extern uint8_t detected_slave_count;
+    usb_app_cdc_printf("I2C: handle_get_i2c_devices called\r\n");
+    HAL_Delay(10);
+    // Force a scan of I2C devices
+    i2c_manager_scan_slaves();
+
+    // First byte of payload is the count of detected slaves
+    response->payload[0] = detected_slave_count;
+
+    // Copy detected slave info into the payload
+    for (int i = 0; i < detected_slave_count; i++) {
+        i2c_device_info_t device_info;
+        device_info.address = detected_slaves[i];
+        device_info.device_type = 0; // Unknown for now, can be updated later
+        device_info.status = 1;      // Online
+        device_info.firmware_version_major = 0;
+        device_info.firmware_version_minor = 0;
+        device_info.firmware_version_patch = 0;
+        sprintf(device_info.name, "Slave %02X", detected_slaves[i]);
+        // Ensure name is null-terminated
+        device_info.name[sizeof(device_info.name) - 1] = '\0';
+
+        memcpy(&response->payload[1 + (i * sizeof(i2c_device_info_t))], &device_info, sizeof(i2c_device_info_t));
+    }
+
+    response->payload_length = 1 + (detected_slave_count * sizeof(i2c_device_info_t));
+
 }
 
 static void handle_get_device_status(config_packet_t *response)
