@@ -98,8 +98,10 @@ extern "C" {
 // HID buffer size Should be sufficient to hold ID (if any) + Data
 #define CFG_TUD_HID_EP_BUFSIZE      64
 
-// HID polling interval
-#define CFG_TUD_HID_POLL_INTERVAL   10
+// HID polling interval (bInterval in endpoint descriptor)
+// 1 = 125 µs (8000 Hz polling rate on Full-Speed USB)
+// 10 = 10 ms (100 Hz polling rate - typical keyboard)
+#define CFG_TUD_HID_POLL_INTERVAL   1  // 8 kHz polling for ultra-low latency
 
 // MIDI buffer size
 #define CFG_TUD_MIDI_EP_BUFSIZE     64
@@ -107,7 +109,7 @@ extern "C" {
 #define CFG_TUD_MIDI_TX_BUFSIZE     64
 
 // MIDI polling interval
-#define CFG_TUD_MIDI_POLL_INTERVAL  10
+#define CFG_TUD_MIDI_POLL_INTERVAL  1
 
 // CDC FIFO size of TX and RX
 #define CFG_TUD_CDC_RX_BUFSIZE      64

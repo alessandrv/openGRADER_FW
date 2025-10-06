@@ -31,6 +31,8 @@ static void handle_midi_note_off(const config_packet_t *request, config_packet_t
 static void handle_midi_cc(const config_packet_t *request, config_packet_t *response);
 static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode);
 static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode);
+static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
+static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
 static void handle_get_slave_keymap(const config_packet_t *request, config_packet_t *response)
 {
     if (request->payload_length < 3) {
@@ -42,10 +44,11 @@ static void handle_get_slave_keymap(const config_packet_t *request, config_packe
     uint8_t row = request->payload[1];
     uint8_t col = request->payload[2];
     
+    usb_app_cdc_printf("GET_SLAVE[0x%02X,%d,%d]\r\n", slave_addr, row, col);
+    
     // Check if we're in master mode
     if (i2c_manager_get_mode() != 1) {
         response->status = STATUS_ERROR;
-        usb_app_cdc_printf("Config: Cannot get slave keymap - not in master mode\r\n");
         return;
     }
     
@@ -65,9 +68,6 @@ static void handle_get_slave_keymap(const config_packet_t *request, config_packe
     }
     
     response->payload_length = sizeof(keymap_entry_t);
-    
-    usb_app_cdc_printf("Config: Get slave keymap [%02X,%d,%d] = 0x%04X\r\n", 
-                 slave_addr, row, col, entry->keycode);
 }
 
 static void handle_set_slave_keymap(const config_packet_t *request, config_packet_t *response)
@@ -98,6 +98,72 @@ static void handle_set_slave_keymap(const config_packet_t *request, config_packe
                  slave_addr, entry->row, entry->col, entry->keycode);
 }
 
+static void handle_get_slave_encoder(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t slave_addr = request->payload[0];
+    uint8_t encoder_id = request->payload[1];
+
+    if (i2c_manager_get_mode() != 1) {
+        response->status = STATUS_ERROR;
+        return;
+    }
+
+    if (encoder_id >= ENCODER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    encoder_entry_t *entry = (encoder_entry_t*)response->payload;
+    entry->encoder_id = encoder_id;
+    entry->ccw_keycode = 0;
+    entry->cw_keycode = 0;
+    entry->reserved = 0;
+
+    uint16_t ccw_code = 0;
+    uint16_t cw_code = 0;
+    if (request_encoder_from_slave(slave_addr, encoder_id, &ccw_code, &cw_code)) {
+        entry->ccw_keycode = ccw_code;
+        entry->cw_keycode = cw_code;
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+
+    response->payload_length = sizeof(encoder_entry_t);
+}
+
+static void handle_set_slave_encoder(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < sizeof(encoder_entry_t) + 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t slave_addr = request->payload[0];
+    const encoder_entry_t *entry = (const encoder_entry_t*)(request->payload + 1);
+
+    if (i2c_manager_get_mode() != 1) {
+        response->status = STATUS_ERROR;
+        return;
+    }
+
+    if (entry->encoder_id >= ENCODER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    if (send_encoder_to_slave(slave_addr, entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+}
+
 static void handle_get_slave_info(const config_packet_t *request, config_packet_t *response)
 {
     if (request->payload_length < 1) {
@@ -125,7 +191,7 @@ static void handle_get_slave_info(const config_packet_t *request, config_packet_
     info->device_type = 0; // 0=Slave
     info->matrix_rows = MATRIX_ROWS; // Assuming same matrix size as master
     info->matrix_cols = MATRIX_COLS;
-    info->encoder_count = 0; // Assuming no encoders on slave
+    info->encoder_count = ENCODER_COUNT;
     info->i2c_devices = 0; // Slaves don't have I2C devices
     
     // Set default name
@@ -142,46 +208,49 @@ static void handle_get_slave_info(const config_packet_t *request, config_packet_
 // Helper functions for I2C communication with slaves
 static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode)
 {
-    uint8_t tx_data[4] = {
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
         CMD_GET_KEYMAP,  // Command to get keymap
         row,             // Row
         col,             // Column
-        0                // Padding
+        0,               // Padding / reserved
+        0,               // Reserved for alignment with SET command length
+        0                // Reserved for future use
     };
     uint8_t rx_data[4] = {0};
     
     // Send request to slave and get response
     if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
-        usb_app_cdc_printf("I2C: Failed to send keymap request to slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("GET_KEYMAP: TX failed to 0x%02X\r\n", slave_addr);
         return false;
     }
     
-    // Wait a bit for slave to process
-    HAL_Delay(5);
+    // Wait for slave to process command and prepare response
+    // This delay must be long enough for the slave's RX complete callback to finish
+    HAL_Delay(20);
     
     // Receive response
     if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
-        usb_app_cdc_printf("I2C: Failed to receive keymap from slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("GET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
     
     // Check if response is valid
     if (rx_data[0] != CMD_GET_KEYMAP) {
-        usb_app_cdc_printf("I2C: Invalid response from slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("GET_KEYMAP: Bad response [%02X %02X %02X %02X]\r\n", 
+                     rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
         return false;
     }
     
     // Extract keycode (little endian)
     *keycode = rx_data[1] | (rx_data[2] << 8);
     
-    usb_app_cdc_printf("I2C: Got keymap from slave 0x%02X [%d,%d] = 0x%04X\r\n", 
-                 slave_addr, row, col, *keycode);
+    usb_app_cdc_printf("GET_KEYMAP: [%d,%d] = 0x%04X\r\n", row, col, *keycode);
     return true;
 }
 
 static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode)
 {
-    uint8_t tx_data[6] = {
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
         CMD_SET_KEYMAP,      // Command to set keymap
         row,                 // Row
         col,                 // Column
@@ -193,27 +262,101 @@ static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, u
     
     // Send request to slave
     if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
-        usb_app_cdc_printf("I2C: Failed to send keymap to slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("SET_KEYMAP: TX failed to 0x%02X\r\n", slave_addr);
         return false;
     }
     
-    // Wait a bit for slave to process
-    HAL_Delay(5);
+    // Wait for slave to process command and prepare response
+    // This delay must be long enough for the slave's RX complete callback to finish
+    HAL_Delay(20);
     
     // Receive response (status)
     if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
-        usb_app_cdc_printf("I2C: Failed to receive status from slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("SET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
     
     // Check if response is valid
     if (rx_data[0] != CMD_SET_KEYMAP || rx_data[1] != STATUS_OK) {
-        usb_app_cdc_printf("I2C: Invalid response from slave 0x%02X\r\n", slave_addr);
+        usb_app_cdc_printf("SET_KEYMAP: Bad response [%02X %02X]\r\n", rx_data[0], rx_data[1]);
         return false;
     }
     
-    usb_app_cdc_printf("I2C: Set keymap on slave 0x%02X [%d,%d] = 0x%04X\r\n", 
-                 slave_addr, row, col, keycode);
+    usb_app_cdc_printf("SET_KEYMAP: [%d,%d] = 0x%04X OK\r\n", row, col, keycode);
+    return true;
+}
+
+static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
+{
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
+        CMD_GET_ENCODER_MAP,
+        encoder_id,
+        0,
+        0,
+        0,
+        0
+    };
+    uint8_t rx_data[I2C_SLAVE_CONFIG_MAX_RESPONSE] = {0};
+
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("GET_ENCODER: TX failed to 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    HAL_Delay(20);
+
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, 7, 100) != HAL_OK) {
+        usb_app_cdc_printf("GET_ENCODER: RX failed from 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    if (rx_data[0] != CMD_GET_ENCODER_MAP || rx_data[1] != encoder_id) {
+        usb_app_cdc_printf("GET_ENCODER: Bad response header [%02X %02X]\r\n", rx_data[0], rx_data[1]);
+        return false;
+    }
+
+    if (rx_data[6] != STATUS_OK) {
+        usb_app_cdc_printf("GET_ENCODER: Status error %02X\r\n", rx_data[6]);
+        return false;
+    }
+
+    *ccw_keycode = rx_data[2] | (rx_data[3] << 8);
+    *cw_keycode = rx_data[4] | (rx_data[5] << 8);
+
+    usb_app_cdc_printf("GET_ENCODER: [%d] CCW=0x%04X CW=0x%04X\r\n", encoder_id, *ccw_keycode, *cw_keycode);
+    return true;
+}
+
+static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
+{
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
+        CMD_SET_ENCODER_MAP,
+        encoder_id,
+        ccw_keycode & 0xFF,
+        (ccw_keycode >> 8) & 0xFF,
+        cw_keycode & 0xFF,
+        (cw_keycode >> 8) & 0xFF
+    };
+    uint8_t rx_data[2] = {0};
+
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("SET_ENCODER: TX failed to 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    HAL_Delay(20);
+
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+        usb_app_cdc_printf("SET_ENCODER: RX failed from 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    if (rx_data[0] != CMD_SET_ENCODER_MAP || rx_data[1] != STATUS_OK) {
+        usb_app_cdc_printf("SET_ENCODER: Bad response [%02X %02X]\r\n", rx_data[0], rx_data[1]);
+        return false;
+    }
+
+    usb_app_cdc_printf("SET_ENCODER: [%d] CCW=0x%04X CW=0x%04X OK\r\n", encoder_id, ccw_keycode, cw_keycode);
     return true;
 }
 
@@ -272,15 +415,6 @@ void config_protocol_task(void)
 
 bool config_protocol_process_packet(const config_packet_t *packet)
 {
-    // Read header from raw bytes to ensure correct interpretation
-    uint8_t *raw_bytes = (uint8_t*)packet;
-   
-    
-    // Read header as little-endian from raw bytes
-    uint16_t received_header = raw_bytes[0] | (raw_bytes[1] << 8);
-    
-   
-    
     // Prepare response packet
     tx_packet.header = CONFIG_PACKET_HEADER;
     tx_packet.command = packet->command;
@@ -351,6 +485,14 @@ bool config_protocol_process_packet(const config_packet_t *packet)
             
         case CMD_GET_SLAVE_INFO:
             handle_get_slave_info(packet, &tx_packet);
+            break;
+
+        case CMD_GET_SLAVE_ENCODER:
+            handle_get_slave_encoder(packet, &tx_packet);
+            break;
+
+        case CMD_SET_SLAVE_ENCODER:
+            handle_set_slave_encoder(packet, &tx_packet);
             break;
             
         case CMD_SAVE_CONFIG:
@@ -558,8 +700,7 @@ static void handle_get_i2c_devices(config_packet_t *response)
 {
     extern uint8_t detected_slaves[16];
     extern uint8_t detected_slave_count;
-    usb_app_cdc_printf("I2C: handle_get_i2c_devices called\r\n");
-    HAL_Delay(10);
+    
     // Force a scan of I2C devices
     i2c_manager_scan_slaves();
 
@@ -569,6 +710,11 @@ static void handle_get_i2c_devices(config_packet_t *response)
     // Copy detected slave info into the payload
     for (int i = 0; i < detected_slave_count; i++) {
         i2c_device_info_t device_info;
+        // Clear the struct
+        for (int j = 0; j < sizeof(i2c_device_info_t); j++) {
+            ((uint8_t*)&device_info)[j] = 0;
+        }
+        
         device_info.address = detected_slaves[i];
         device_info.device_type = 0; // Unknown for now, can be updated later
         device_info.status = 1;      // Online
@@ -583,7 +729,6 @@ static void handle_get_i2c_devices(config_packet_t *response)
     }
 
     response->payload_length = 1 + (detected_slave_count * sizeof(i2c_device_info_t));
-
 }
 
 static void handle_get_device_status(config_packet_t *response)

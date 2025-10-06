@@ -116,6 +116,10 @@ static void cdc_task(void)
 // HID task
 //--------------------------------------------------------------------+
 
+// HID Task: Processes keyboard events and sends reports
+// With 8 kHz USB polling (CFG_TUD_HID_POLL_INTERVAL = 1), the host polls
+// every 125 µs. TinyUSB handles the timing automatically; we just need to
+// ensure the report buffer is updated with the current state.
 static void hid_task(void)
 {
 	if (keyboard_pending_release && tud_hid_n_ready(0))

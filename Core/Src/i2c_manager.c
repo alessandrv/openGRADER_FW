@@ -8,6 +8,8 @@
 #include "main.h"
 #include <string.h>
 #include "usb_app.h"
+#include "input/keymap.h"
+#include "config_protocol.h"
 /* Private constants */
 #define I2C_SLAVE_ADDRESS 0x42  // 7-bit address for slave mode
 #define I2C_EVENT_FIFO_SIZE 16
@@ -64,6 +66,11 @@ static i2c_message_t i2c_rx_buffer = {0};
 /* I2C slave receive buffer and callback handling */
 static uint8_t i2c_slave_rx_buffer[32];
 static volatile uint8_t i2c_slave_data_received = 0;
+
+/* Simple response buffer for configuration commands (separate from event FIFO) */
+static uint8_t i2c_slave_config_response[I2C_SLAVE_CONFIG_MAX_RESPONSE] = {0};
+static volatile uint8_t i2c_slave_config_response_length = 0;
+static volatile uint8_t i2c_slave_has_config_response = 0;
 
 /* Private function prototypes */
 static uint8_t i2c_fifo_is_full(void);
@@ -160,7 +167,6 @@ static uint8_t i2c_master_fifo_pop(i2c_key_event_t *event)
     *event = i2c_master_event_fifo[i2c_master_fifo_tail];
     i2c_master_fifo_tail = (i2c_master_fifo_tail + 1) % I2C_EVENT_FIFO_SIZE;
     i2c_master_fifo_count--;
-
     return 1;
 }
 
@@ -187,7 +193,7 @@ static void configure_i2c_master(void)
     
     // Configure as master
     hi2c2.Instance = I2C2;
-    hi2c2.Init.Timing = 0x60715075;
+    hi2c2.Init.Timing = 0x00200409;  // 1 MHz Fast Mode Plus
     hi2c2.Init.OwnAddress1 = 0; // Master doesn't need own address
     hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
     hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -215,7 +221,7 @@ static void configure_i2c_slave(void)
     
     // Configure as slave
     hi2c2.Instance = I2C2;
-    hi2c2.Init.Timing = 0x60715075;
+    hi2c2.Init.Timing = 0x00200409;  // 1 MHz Fast Mode Plus
     hi2c2.Init.OwnAddress1 = (I2C_SLAVE_ADDRESS << 1); // Shift for HAL format
     hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
     hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -403,31 +409,23 @@ uint8_t i2c_manager_get_mode(void)
 /* I2C master: scan for available slaves */
 void i2c_manager_scan_slaves(void)
 {
-    usb_app_cdc_printf("I2C: i2c_manager_scan_slaves called\r\n");
-    HAL_Delay(10);
     uint32_t now = HAL_GetTick();
     if ((now - last_slave_scan) < SLAVE_SCAN_INTERVAL_MS) {
-        usb_app_cdc_printf("I2C: Skipping scan, not time yet\r\n");
-        HAL_Delay(10);
-        return; // Not time to scan yet
+        return; // Not time to scan yet, use cached results
     }
     
     last_slave_scan = now;
     detected_slave_count = 0;
     
     if (current_i2c_mode != 1) {
-        usb_app_cdc_printf("I2C: Cannot scan slaves - not in master mode (mode=%d)\r\n", current_i2c_mode);
-        HAL_Delay(10);
         return;
     }
     
-    HAL_Delay(10);
-    
     // Scan I2C address range (0x08 to 0x77 are valid 7-bit addresses)
+    // Use a faster scan with reduced timeout
     for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-        // Quick ping to see if device responds
-        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, addr << 1, 1, 50);
-        HAL_Delay(20);
+        // Quick ping to see if device responds (reduced timeout to 10ms)
+        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, addr << 1, 1, 10);
         
         if (status == HAL_OK) {
             // Device found
@@ -435,13 +433,13 @@ void i2c_manager_scan_slaves(void)
                 detected_slaves[detected_slave_count] = addr;
                 detected_slave_count++;
             }
-            HAL_Delay(20);
         }
     }
     
-    if (detected_slave_count == 0) {
-        usb_app_cdc_printf("I2C: No slaves detected\r\n");
-    } 
+    // Only log the final result, not each step
+    if (detected_slave_count > 0) {
+        usb_app_cdc_printf("I2C: Scan found %d slave(s)\r\n", detected_slave_count);
+    }
 }
 
 void i2c_manager_task(void)
@@ -622,11 +620,29 @@ void i2c_manager_addr_callback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirectio
 {
     if (hi2c->Instance == I2C2) {
         if (TransferDirection == I2C_DIRECTION_TRANSMIT) {
-            // Master is writing to us - prepare to receive
-            HAL_I2C_Slave_Seq_Receive_IT(hi2c, i2c_slave_rx_buffer, sizeof(i2c_slave_rx_buffer), I2C_FIRST_AND_LAST_FRAME);
+            // Master is writing to us - prepare to receive configuration command bytes
+            HAL_I2C_Slave_Seq_Receive_IT(hi2c, i2c_slave_rx_buffer, I2C_SLAVE_CONFIG_CMD_SIZE, I2C_FIRST_AND_LAST_FRAME);
         } else {
             // Master is reading from us
-            if (i2c_slave_state == I2C_SLAVE_STATE_READY) {
+            // Check if we have a config response ready (takes priority over event FIFO)
+            if (i2c_slave_has_config_response) {
+                // Send config response
+                uint8_t length = i2c_slave_config_response_length;
+                if (length == 0 || length > I2C_SLAVE_CONFIG_MAX_RESPONSE) {
+                    length = 1; // fail-safe to avoid zero-length transfers
+                }
+
+                usb_app_cdc_printf("SLAVE TX (%d bytes):", length);
+                for (uint8_t idx = 0; idx < length; idx++) {
+                    usb_app_cdc_printf(" %02X", i2c_slave_config_response[idx]);
+                }
+                usb_app_cdc_printf("\r\n");
+
+                HAL_I2C_Slave_Seq_Transmit_IT(hi2c, i2c_slave_config_response, length, I2C_FIRST_AND_LAST_FRAME);
+                i2c_slave_has_config_response = 0; // Clear flag
+                i2c_slave_config_response_length = 0;
+            }
+            else if (i2c_slave_state == I2C_SLAVE_STATE_READY) {
                 // We are ready, try to send an event from the FIFO
                 if (i2c_fifo_pop(&i2c_tx_buffer)) {
                     // Event found, prepare for transmission
@@ -670,7 +686,82 @@ void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c)
 {
     if (hi2c->Instance == I2C2) {
         i2c_slave_data_received = 1;
-        // Re-enable listening for the next transaction
+        
+        // Process received command
+        if (i2c_slave_rx_buffer[0] == CMD_GET_KEYMAP) {
+            // Master is requesting keymap entry
+            uint8_t row = i2c_slave_rx_buffer[1];
+            uint8_t col = i2c_slave_rx_buffer[2];
+            
+            // Get keycode from our local keymap
+            extern uint16_t keymap_get_keycode(uint8_t row, uint8_t col);
+            uint16_t keycode = keymap_get_keycode(row, col);
+            
+            // Prepare simple 4-byte response: [CMD, keycode_low, keycode_high, status]
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_GET_KEYMAP;
+            i2c_slave_config_response[1] = keycode & 0xFF;
+            i2c_slave_config_response[2] = (keycode >> 8) & 0xFF;
+            i2c_slave_config_response[3] = STATUS_OK;
+            i2c_slave_config_response_length = 4;
+            i2c_slave_has_config_response = 1;
+            
+            usb_app_cdc_printf("SLAVE RX: GET[%d,%d] = 0x%04X\r\n", row, col, keycode);
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_SET_KEYMAP) {
+            // Master is setting keymap entry
+            uint8_t row = i2c_slave_rx_buffer[1];
+            uint8_t col = i2c_slave_rx_buffer[2];
+            uint16_t keycode = i2c_slave_rx_buffer[3] | (i2c_slave_rx_buffer[4] << 8);
+            
+            // Set keycode in our local keymap
+            bool success = keymap_set_keycode(row, col, keycode);
+            
+            // Prepare simple 2-byte response: [CMD, status]
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_SET_KEYMAP;
+            i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
+            i2c_slave_config_response_length = 2;
+            i2c_slave_has_config_response = 1;
+            
+            usb_app_cdc_printf("SLAVE RX: SET[%d,%d] = 0x%04X %s\r\n", 
+                         row, col, keycode, success ? "OK" : "ERR");
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_GET_ENCODER_MAP) {
+            uint8_t encoder_id = i2c_slave_rx_buffer[1];
+            uint16_t ccw_keycode = 0;
+            uint16_t cw_keycode = 0;
+            bool success = keymap_get_encoder_map(encoder_id, &ccw_keycode, &cw_keycode);
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_GET_ENCODER_MAP;
+            i2c_slave_config_response[1] = encoder_id;
+            if (success) {
+                i2c_slave_config_response[2] = ccw_keycode & 0xFF;
+                i2c_slave_config_response[3] = (ccw_keycode >> 8) & 0xFF;
+                i2c_slave_config_response[4] = cw_keycode & 0xFF;
+                i2c_slave_config_response[5] = (cw_keycode >> 8) & 0xFF;
+                i2c_slave_config_response[6] = STATUS_OK;
+            } else {
+                i2c_slave_config_response[6] = STATUS_INVALID_PARAM;
+            }
+            i2c_slave_config_response_length = 7;
+            i2c_slave_has_config_response = 1;
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_SET_ENCODER_MAP) {
+            uint8_t encoder_id = i2c_slave_rx_buffer[1];
+            uint16_t ccw_keycode = i2c_slave_rx_buffer[2] | (i2c_slave_rx_buffer[3] << 8);
+            uint16_t cw_keycode = i2c_slave_rx_buffer[4] | (i2c_slave_rx_buffer[5] << 8);
+            bool success = keymap_set_encoder_map(encoder_id, ccw_keycode, cw_keycode);
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_SET_ENCODER_MAP;
+            i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
+            i2c_slave_config_response_length = 2;
+            i2c_slave_has_config_response = 1;
+        }
+
+        // Re-enable listening so the next transaction can be accepted
         HAL_I2C_EnableListen_IT(hi2c);
     }
 }
@@ -680,7 +771,6 @@ void i2c_manager_slave_tx_complete_callback(I2C_HandleTypeDef *hi2c)
     if (hi2c->Instance == I2C2) {
         // Transmission is complete, we are ready for a new request
         i2c_slave_state = I2C_SLAVE_STATE_READY;
-        // Re-enable listening for the next transaction
         HAL_I2C_EnableListen_IT(hi2c);
     }
 }
@@ -688,8 +778,7 @@ void i2c_manager_slave_tx_complete_callback(I2C_HandleTypeDef *hi2c)
 void i2c_manager_listen_complete_callback(I2C_HandleTypeDef *hi2c)
 {
     if (hi2c->Instance == I2C2) {
-        // This indicates the end of a slave transaction (e.g., after a STOP condition)
-        // Re-enable listening to be ready for the next master request
+        // This indicates the end of a slave transaction (STOP condition)
         HAL_I2C_EnableListen_IT(hi2c);
     }
 }

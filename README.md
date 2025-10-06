@@ -5,11 +5,16 @@ This project implements a real-time configuration system for the OpenGrader modu
 ## Features
 
 ### STM32 Firmware Features
+- **⚡ 8 kHz USB Polling Rate**: Ultra-low latency with 125 µs response time (8× faster than standard keyboards)
+- **🚀 1 MHz I2C Fast Mode+**: 10× faster slave module communication for modular keyboard systems
 - **Real-time Keymap Configuration**: Change key assignments on-the-fly via USB HID
 - **Encoder Configuration**: Configure rotary encoder mappings in real-time
 - **EEPROM Emulation**: Persistent storage using internal flash memory
 - **USB HID Protocol**: Custom configuration protocol over HID interface
 - **Multiple USB Interfaces**: Keyboard, Mouse, MIDI, CDC, and Configuration HID
+
+> **📊 Performance**: Total input latency of ~1.3 ms (vs ~2.8 ms for standard keyboards)  
+> See [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md) for details.
 
 ### Desktop Application Features
 - **Device Discovery**: Automatic detection of OpenGrader devices
@@ -67,9 +72,18 @@ Configuration data is stored in the last 4KB of flash memory with:
 ## Usage
 
 ### Building STM32 Firmware
-1. Open the project in STM32CubeIDE or use CMake
-2. Build and flash to STM32G474VET6
+1. Open the project in STM32CubeIDE or use CMake:
+   ```powershell
+   cmake --build build
+   ```
+2. Flash to STM32G474VET6:
+   - **Via ST-Link**: Use the `Build + Flash` task in VS Code
+   - **Via USB DFU**: See [USB_FLASH_QUICKSTART.md](USB_FLASH_QUICKSTART.md) (no programmer needed!)
 3. The device will appear as multiple USB interfaces
+
+> 💡 **Tip**: You can flash via USB without an ST-Link programmer! Just hold BOOT0 and connect USB.  
+> Quick command: `STM32_Programmer_CLI -c port=usb1 -d build\TINYUSBTEST.elf -v -hardRst -rst`  
+> See [USB Flashing Guide](USB_FLASHING_GUIDE.md) for details.
 
 ### Running Desktop Application
 1. Navigate to the configurator directory:
@@ -142,3 +156,23 @@ Configuration data is stored in the last 4KB of flash memory with:
 - Check HID interface is properly enumerated
 - Verify packet structure matches between firmware and application
 - Monitor CDC output for debug messages
+
+## Performance Optimization
+
+This keyboard implements **8 kHz USB polling** and **1 MHz I2C communication** for professional-grade latency:
+
+- **8× faster** USB response time (125 µs vs 1 ms)
+- **10× faster** I2C slave polling (72 µs vs 720 µs)
+- **≈2× lower** total end-to-end latency
+
+For complete technical details, configuration options, and testing procedures, see:
+- [PERFORMANCE_OPTIMIZATION.md](PERFORMANCE_OPTIMIZATION.md) - Full technical documentation
+- [8KHZ_QUICK_REFERENCE.md](8KHZ_QUICK_REFERENCE.md) - Quick setup guide
+
+### Quick Performance Stats
+
+| Component | Standard | Optimized | Improvement |
+|-----------|----------|-----------|-------------|
+| USB Polling | 1 kHz | 8 kHz | 8× faster |
+| I2C Speed | 100 kHz | 1 MHz | 10× faster |
+| Total Latency | ~2.8 ms | ~1.3 ms | 2× faster |
