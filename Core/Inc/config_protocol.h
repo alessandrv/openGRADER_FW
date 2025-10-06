@@ -44,7 +44,8 @@ typedef enum {
     CMD_SET_SLAVE_KEYMAP = 0x12,   // Set keymap on slave device (payload: address(1), row(1), col(1), keycode(2))
     CMD_GET_SLAVE_INFO = 0x13,     // Get detailed info from slave device (payload: address(1))
     CMD_GET_SLAVE_ENCODER = 0x14,  // Get encoder mapping from slave (payload: address(1), encoder_id(1))
-    CMD_SET_SLAVE_ENCODER = 0x15   // Set encoder mapping on slave (payload: address(1), encoder_id(1), keycodes(4))
+    CMD_SET_SLAVE_ENCODER = 0x15,  // Set encoder mapping on slave (payload: address(1), encoder_id(1), keycodes(4))
+    CMD_GET_LAYOUT_INFO = 0x16     // Retrieve static board layout metadata
 } config_command_t;
 
 // Response status codes

@@ -1,6 +1,7 @@
 #include "config_protocol.h"
 #include "usb_app.h"
 #include "input/keymap.h"
+#include "input/board_layout.h"
 #include "i2c_manager.h"
 #include "i2c.h"  // Added to include hi2c2 declaration
 #include "pin_config.h"
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 // Private variables
 static config_packet_t rx_packet;
@@ -25,6 +27,7 @@ static void handle_get_encoder_map(const config_packet_t *request, config_packet
 static void handle_set_encoder_map(const config_packet_t *request, config_packet_t *response);
 static void handle_get_i2c_devices(config_packet_t *response);
 static void handle_get_device_status(config_packet_t *response);
+static void handle_get_layout_info(config_packet_t *response);
 static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response);
@@ -493,6 +496,10 @@ bool config_protocol_process_packet(const config_packet_t *packet)
             handle_get_device_status(&tx_packet);
             break;
 
+        case CMD_GET_LAYOUT_INFO:
+            handle_get_layout_info(&tx_packet);
+            break;
+
         case CMD_MIDI_SEND_RAW:
             handle_midi_send_raw(packet, &tx_packet);
             break;
@@ -792,6 +799,24 @@ static void handle_get_device_status(config_packet_t *response)
     response->payload_length = 1;
     
     usb_app_cdc_printf("Config: Get device status\r\n");
+}
+
+static void handle_get_layout_info(config_packet_t *response)
+{
+    const size_t layout_size = sizeof(board_layout_info_t);
+    if (layout_size > CONFIG_MAX_PAYLOAD_SIZE) {
+        response->status = STATUS_ERROR;
+        response->payload_length = 0;
+        usb_app_cdc_printf("Config: Layout info too large (%u bytes)\r\n", (unsigned int)layout_size);
+        return;
+    }
+
+    for (size_t i = 0; i < layout_size; i++) {
+        response->payload[i] = ((const uint8_t*)&board_layout_info)[i];
+    }
+
+    response->payload_length = layout_size;
+    usb_app_cdc_printf("Config: Provided layout info (v%u)\r\n", board_layout_info.version);
 }
 
 static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response)
