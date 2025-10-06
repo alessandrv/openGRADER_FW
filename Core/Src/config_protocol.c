@@ -33,6 +33,7 @@ static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t c
 static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode);
 static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
 static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
+static bool send_save_to_slave(uint8_t slave_addr);
 static void handle_get_slave_keymap(const config_packet_t *request, config_packet_t *response)
 {
     if (request->payload_length < 3) {
@@ -360,6 +361,39 @@ static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16
     return true;
 }
 
+static bool send_save_to_slave(uint8_t slave_addr)
+{
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
+        CMD_SAVE_CONFIG,
+        0,
+        0,
+        0,
+        0,
+        0
+    };
+    uint8_t rx_data[2] = {0};
+
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 200) != HAL_OK) {
+        usb_app_cdc_printf("SAVE_CONFIG: TX failed to 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    HAL_Delay(25);
+
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 200) != HAL_OK) {
+        usb_app_cdc_printf("SAVE_CONFIG: RX failed from 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    if (rx_data[0] != CMD_SAVE_CONFIG || rx_data[1] != STATUS_OK) {
+        usb_app_cdc_printf("SAVE_CONFIG: Bad response [%02X %02X]\r\n", rx_data[0], rx_data[1]);
+        return false;
+    }
+
+    usb_app_cdc_printf("SAVE_CONFIG: Slave 0x%02X saved successfully\r\n", slave_addr);
+    return true;
+}
+
 // Public functions
 void config_protocol_init(void)
 {
@@ -498,8 +532,28 @@ bool config_protocol_process_packet(const config_packet_t *packet)
         case CMD_SAVE_CONFIG:
             // Use force save for explicit user save requests
             if (eeprom_force_save_config()) {
-                tx_packet.status = STATUS_OK;
-                usb_app_cdc_printf("Config: Configuration force-saved to EEPROM\r\n");
+                bool all_slaves_ok = true;
+
+                if (i2c_manager_get_mode() == 1) {
+                    extern uint8_t detected_slaves[16];
+                    extern uint8_t detected_slave_count;
+
+                    i2c_manager_scan_slaves();
+
+                    for (uint8_t i = 0; i < detected_slave_count; i++) {
+                        uint8_t slave_addr = detected_slaves[i];
+                        if (!send_save_to_slave(slave_addr)) {
+                            all_slaves_ok = false;
+                            usb_app_cdc_printf("Config: Failed to save slave 0x%02X\r\n", slave_addr);
+                        } else {
+                            usb_app_cdc_printf("Config: Saved slave 0x%02X to EEPROM\r\n", slave_addr);
+                        }
+                    }
+                }
+
+                tx_packet.status = all_slaves_ok ? STATUS_OK : STATUS_ERROR;
+                usb_app_cdc_printf("Config: Configuration force-saved to EEPROM%s\r\n",
+                                    all_slaves_ok ? " (including slaves)" : " (slave save failures)");
             } else {
                 tx_packet.status = STATUS_ERROR;
                 usb_app_cdc_printf("Config: Failed to save configuration\r\n");

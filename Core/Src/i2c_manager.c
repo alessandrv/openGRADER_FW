@@ -10,6 +10,7 @@
 #include "usb_app.h"
 #include "input/keymap.h"
 #include "config_protocol.h"
+#include "eeprom_emulation.h"
 /* Private constants */
 #define I2C_SLAVE_ADDRESS 0x42  // 7-bit address for slave mode
 #define I2C_EVENT_FIFO_SIZE 16
@@ -759,6 +760,16 @@ void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c)
             i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
             i2c_slave_config_response_length = 2;
             i2c_slave_has_config_response = 1;
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_SAVE_CONFIG) {
+            bool success = eeprom_save_config();
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_SAVE_CONFIG;
+            i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
+            i2c_slave_config_response_length = 2;
+            i2c_slave_has_config_response = 1;
+            usb_app_cdc_printf("SLAVE RX: SAVE_CONFIG %s\r\n", success ? "OK" : "ERR");
         }
 
         // Re-enable listening so the next transaction can be accepted

@@ -63,7 +63,7 @@ static uint32_t last_usb_check = 0;
 #define USB_CHECK_INTERVAL_MS 1000
 
 #ifndef FORCE_SLAVE_MODE
-#define FORCE_SLAVE_MODE 1
+#define FORCE_SLAVE_MODE 0
 #endif
 
 /* Matrix event callback (file scope) */
