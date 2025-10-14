@@ -172,7 +172,7 @@ void encoder_task(void)
 	if (q_pop(&ev)) {
 		// Get current encoder mapping (from EEPROM if available, otherwise defaults)
 		uint16_t ccw_keycode, cw_keycode;
-		if (!keymap_get_encoder_map(ev.idx, &ccw_keycode, &cw_keycode)) {
+		if (!keymap_get_active_encoder_map(ev.idx, &ccw_keycode, &cw_keycode)) {
 			usb_app_cdc_printf("Error: Failed to get encoder[%d] mapping\r\n", ev.idx);
 			return;
 		}
@@ -184,14 +184,17 @@ void encoder_task(void)
 		// Handle MIDI keycodes first (like matrix processing does)
 		midi_handle_keycode(keycode, 1); // Press
 		midi_handle_keycode(keycode, 0); // Release (encoder events are momentary)
-		
-		// Handle HID events via shared I2C manager queue for both master and slave
-		uint8_t hid_keycode = op_keycode_to_hid(keycode);
-		if (hid_keycode != 0) {
+
+		uint8_t hid_keycode = 0;
+		bool should_send = keymap_translate_keycode(keycode, true, &hid_keycode);
+		uint8_t hid_to_send = hid_keycode;
+		keymap_translate_keycode(keycode, false, &hid_keycode);
+
+		if (should_send && hid_to_send != 0) {
 			uint8_t direction_flag = (ev.dir == ENC_CW) ? 1U : 0U;
 			usb_app_cdc_printf("Queueing encoder HID event via I2C manager (dir=%s)\r\n",
 						 (direction_flag == 1U) ? "CW" : "CCW");
-			i2c_manager_process_local_key_event(254, ev.idx, direction_flag, hid_keycode);
+			i2c_manager_process_local_key_event(254, ev.idx, direction_flag, hid_to_send);
 		}
 	}
 }

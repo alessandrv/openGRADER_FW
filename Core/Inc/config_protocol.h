@@ -15,7 +15,7 @@ extern "C" {
 #define CONFIG_PACKET_HEADER 0x4F47    // "OG" - matches Tauri app
 #define CONFIG_MAX_PAYLOAD_SIZE 56
 #define CONFIG_PACKET_SIZE 64
-#define I2C_SLAVE_CONFIG_CMD_SIZE 6
+#define I2C_SLAVE_CONFIG_CMD_SIZE 7
 #define I2C_SLAVE_CONFIG_MAX_RESPONSE 8
 
 // Command types
@@ -45,7 +45,9 @@ typedef enum {
     CMD_GET_SLAVE_INFO = 0x13,     // Get detailed info from slave device (payload: address(1))
     CMD_GET_SLAVE_ENCODER = 0x14,  // Get encoder mapping from slave (payload: address(1), encoder_id(1))
     CMD_SET_SLAVE_ENCODER = 0x15,  // Set encoder mapping on slave (payload: address(1), encoder_id(1), keycodes(4))
-    CMD_GET_LAYOUT_INFO = 0x16     // Retrieve static board layout metadata
+    CMD_GET_LAYOUT_INFO = 0x16,    // Retrieve static board layout metadata
+    CMD_SET_LAYER_STATE = 0x17,    // Update active layer mask/default
+    CMD_GET_LAYER_STATE = 0x18     // Query active layer mask/default
 } config_command_t;
 
 // Response status codes
@@ -79,13 +81,15 @@ typedef struct {
     uint8_t matrix_rows;
     uint8_t matrix_cols;
     uint8_t encoder_count;
+    uint8_t layer_count;
     uint8_t i2c_devices;      // Number of connected I2C devices
     char device_name[32];     // Device name string
-    uint8_t reserved[15];     // Padding to 56 bytes
+    uint8_t reserved[14];     // Padding to 56 bytes
 } __attribute__((packed)) device_info_t;
 
 // Keymap entry
 typedef struct {
+    uint8_t layer;
     uint8_t row;
     uint8_t col;
     uint16_t keycode;
@@ -93,6 +97,7 @@ typedef struct {
 
 // Encoder mapping entry  
 typedef struct {
+    uint8_t layer;
     uint8_t encoder_id;
     uint16_t ccw_keycode;
     uint16_t cw_keycode;

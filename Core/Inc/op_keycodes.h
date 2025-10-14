@@ -246,6 +246,17 @@ enum op_keycode_defines {
 #define IS_OP_MIDI_NOTE(code) (IS_OP_MIDI_EVENT(code) && (((code) - OP_MIDI_CC_BASE) & 0x0F) == OP_MIDI_NOTE_FLAG)
 #define IS_OP_MIDI_CC(code) (IS_OP_MIDI_EVENT(code) && (((code) - OP_MIDI_CC_BASE) & 0x0F) != OP_MIDI_NOTE_FLAG)
 
+// Layer keycode helpers
+#define OP_LAYER_ID_MASK 0x1FU
+#define OP_TO_LAYER(layer) ((uint16_t)(OP_TO + ((layer) & OP_LAYER_ID_MASK)))
+#define OP_MO_LAYER(layer) ((uint16_t)(OP_MOMENTARY + ((layer) & OP_LAYER_ID_MASK)))
+#define IS_OP_TO_LAYER(code) ((code) >= OP_TO && (code) <= OP_TO_MAX)
+#define IS_OP_MO_LAYER(code) ((code) >= OP_MOMENTARY && (code) <= OP_MOMENTARY_MAX)
+#define OP_LAYER_TARGET(code) ((uint8_t)((code) & OP_LAYER_ID_MASK))
+
+#define KC_TO(layer) OP_TO_LAYER(layer)
+#define KC_MO(layer) OP_MO_LAYER(layer)
+
 // MIDI helper functions
 // Helper function to get value index from MIDI value
 static inline uint8_t op_midi_get_value_index(uint8_t value) {

@@ -28,27 +28,30 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
 static void handle_get_i2c_devices(config_packet_t *response);
 static void handle_get_device_status(config_packet_t *response);
 static void handle_get_layout_info(config_packet_t *response);
+static void handle_set_layer_state(const config_packet_t *request, config_packet_t *response);
+static void handle_get_layer_state(config_packet_t *response);
 static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_cc(const config_packet_t *request, config_packet_t *response);
-static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode);
-static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode);
-static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
-static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
+static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t *keycode);
+static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t keycode);
+static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
+static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
 static bool send_save_to_slave(uint8_t slave_addr);
 static void handle_get_slave_keymap(const config_packet_t *request, config_packet_t *response)
 {
-    if (request->payload_length < 3) {
+    if (request->payload_length < 4) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
     
     uint8_t slave_addr = request->payload[0];
-    uint8_t row = request->payload[1];
-    uint8_t col = request->payload[2];
+    uint8_t layer = request->payload[1];
+    uint8_t row = request->payload[2];
+    uint8_t col = request->payload[3];
     
-    usb_app_cdc_printf("GET_SLAVE[0x%02X,%d,%d]\r\n", slave_addr, row, col);
+    usb_app_cdc_printf("GET_SLAVE[0x%02X,L%d,%d,%d]\r\n", slave_addr, layer, row, col);
     
     // Check if we're in master mode
     if (i2c_manager_get_mode() != 1) {
@@ -58,13 +61,14 @@ static void handle_get_slave_keymap(const config_packet_t *request, config_packe
     
     // Create keymap entry structure in response
     keymap_entry_t *entry = (keymap_entry_t*)response->payload;
+    entry->layer = layer;
     entry->row = row;
     entry->col = col;
     entry->keycode = 0; // Default value if request fails
     
     // Request keymap from slave
     uint16_t keycode = 0;
-    if (request_keymap_from_slave(slave_addr, row, col, &keycode)) {
+    if (request_keymap_from_slave(slave_addr, layer, row, col, &keycode)) {
         entry->keycode = keycode;
         response->status = STATUS_OK;
     } else {
@@ -90,30 +94,41 @@ static void handle_set_slave_keymap(const config_packet_t *request, config_packe
         usb_app_cdc_printf("Config: Cannot set slave keymap - not in master mode\r\n");
         return;
     }
+
+    if (entry->layer >= KEYMAP_LAYER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
     
     // Send keymap to slave
-    if (send_keymap_to_slave(slave_addr, entry->row, entry->col, entry->keycode)) {
+    if (send_keymap_to_slave(slave_addr, entry->layer, entry->row, entry->col, entry->keycode)) {
         response->status = STATUS_OK;
     } else {
         response->status = STATUS_ERROR;
     }
     
-    usb_app_cdc_printf("Config: Set slave keymap [%02X,%d,%d] = 0x%04X\r\n", 
-                 slave_addr, entry->row, entry->col, entry->keycode);
+    usb_app_cdc_printf("Config: Set slave keymap [%02X,L%d,%d,%d] = 0x%04X\r\n", 
+                 slave_addr, entry->layer, entry->row, entry->col, entry->keycode);
 }
 
 static void handle_get_slave_encoder(const config_packet_t *request, config_packet_t *response)
 {
-    if (request->payload_length < 2) {
+    if (request->payload_length < 3) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
 
     uint8_t slave_addr = request->payload[0];
-    uint8_t encoder_id = request->payload[1];
+    uint8_t layer = request->payload[1];
+    uint8_t encoder_id = request->payload[2];
 
     if (i2c_manager_get_mode() != 1) {
         response->status = STATUS_ERROR;
+        return;
+    }
+
+    if (layer >= KEYMAP_LAYER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
         return;
     }
 
@@ -123,6 +138,7 @@ static void handle_get_slave_encoder(const config_packet_t *request, config_pack
     }
 
     encoder_entry_t *entry = (encoder_entry_t*)response->payload;
+    entry->layer = layer;
     entry->encoder_id = encoder_id;
     entry->ccw_keycode = 0;
     entry->cw_keycode = 0;
@@ -130,7 +146,7 @@ static void handle_get_slave_encoder(const config_packet_t *request, config_pack
 
     uint16_t ccw_code = 0;
     uint16_t cw_code = 0;
-    if (request_encoder_from_slave(slave_addr, encoder_id, &ccw_code, &cw_code)) {
+    if (request_encoder_from_slave(slave_addr, layer, encoder_id, &ccw_code, &cw_code)) {
         entry->ccw_keycode = ccw_code;
         entry->cw_keycode = cw_code;
         response->status = STATUS_OK;
@@ -156,12 +172,17 @@ static void handle_set_slave_encoder(const config_packet_t *request, config_pack
         return;
     }
 
+    if (entry->layer >= KEYMAP_LAYER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
     if (entry->encoder_id >= ENCODER_COUNT) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
 
-    if (send_encoder_to_slave(slave_addr, entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
+    if (send_encoder_to_slave(slave_addr, entry->layer, entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
         response->status = STATUS_OK;
     } else {
         response->status = STATUS_ERROR;
@@ -210,90 +231,87 @@ static void handle_get_slave_info(const config_packet_t *request, config_packet_
 }
 
 // Helper functions for I2C communication with slaves
-static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t *keycode)
+static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t *keycode)
 {
     uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
-        CMD_GET_KEYMAP,  // Command to get keymap
-        row,             // Row
-        col,             // Column
-        0,               // Padding / reserved
-        0,               // Reserved for alignment with SET command length
-        0                // Reserved for future use
+        CMD_GET_KEYMAP,
+        layer,
+        row,
+        col,
+        0,
+        0,
+        0
     };
-    uint8_t rx_data[4] = {0};
-    
-    // Send request to slave and get response
+    uint8_t rx_data[7] = {0};
+
     if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("GET_KEYMAP: TX failed to 0x%02X\r\n", slave_addr);
         return false;
     }
-    
-    // Wait for slave to process command and prepare response
-    // This delay must be long enough for the slave's RX complete callback to finish
+
     HAL_Delay(20);
-    
-    // Receive response
+
     if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("GET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
-    
-    // Check if response is valid
-    if (rx_data[0] != CMD_GET_KEYMAP) {
-        usb_app_cdc_printf("GET_KEYMAP: Bad response [%02X %02X %02X %02X]\r\n", 
-                     rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
+
+    if (rx_data[0] != CMD_GET_KEYMAP || rx_data[1] != layer || rx_data[2] != row || rx_data[3] != col) {
+        usb_app_cdc_printf("GET_KEYMAP: Bad response [%02X %02X %02X %02X ...]\r\n",
+                           rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
         return false;
     }
-    
-    // Extract keycode (little endian)
-    *keycode = rx_data[1] | (rx_data[2] << 8);
-    
-    usb_app_cdc_printf("GET_KEYMAP: [%d,%d] = 0x%04X\r\n", row, col, *keycode);
+
+    if (rx_data[6] != STATUS_OK) {
+        usb_app_cdc_printf("GET_KEYMAP: Status %02X from 0x%02X\r\n", rx_data[6], slave_addr);
+        return false;
+    }
+
+    *keycode = rx_data[4] | (rx_data[5] << 8);
+
+    usb_app_cdc_printf("GET_KEYMAP: [L%d,%d,%d] = 0x%04X\r\n", layer, row, col, *keycode);
     return true;
 }
 
-static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t row, uint8_t col, uint16_t keycode)
+static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t keycode)
 {
     uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
-        CMD_SET_KEYMAP,      // Command to set keymap
-        row,                 // Row
-        col,                 // Column
-        keycode & 0xFF,      // Keycode (low byte)
-        (keycode >> 8) & 0xFF, // Keycode (high byte)
-        0                    // Padding
+        CMD_SET_KEYMAP,
+        layer,
+        row,
+        col,
+        keycode & 0xFF,
+        (keycode >> 8) & 0xFF,
+        0
     };
     uint8_t rx_data[2] = {0};
-    
-    // Send request to slave
+
     if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("SET_KEYMAP: TX failed to 0x%02X\r\n", slave_addr);
         return false;
     }
-    
-    // Wait for slave to process command and prepare response
-    // This delay must be long enough for the slave's RX complete callback to finish
+
     HAL_Delay(20);
-    
-    // Receive response (status)
+
     if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("SET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
-    
-    // Check if response is valid
+
     if (rx_data[0] != CMD_SET_KEYMAP || rx_data[1] != STATUS_OK) {
         usb_app_cdc_printf("SET_KEYMAP: Bad response [%02X %02X]\r\n", rx_data[0], rx_data[1]);
         return false;
     }
-    
-    usb_app_cdc_printf("SET_KEYMAP: [%d,%d] = 0x%04X OK\r\n", row, col, keycode);
+
+    usb_app_cdc_printf("SET_KEYMAP: [L%d,%d,%d] = 0x%04X OK\r\n", layer, row, col, keycode);
     return true;
 }
 
-static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
+static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
 {
     uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
         CMD_GET_ENCODER_MAP,
+        layer,
         encoder_id,
         0,
         0,
@@ -309,32 +327,34 @@ static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t encoder_id, u
 
     HAL_Delay(20);
 
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, 7, 100) != HAL_OK) {
+    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, 8, 100) != HAL_OK) {
         usb_app_cdc_printf("GET_ENCODER: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
 
-    if (rx_data[0] != CMD_GET_ENCODER_MAP || rx_data[1] != encoder_id) {
-        usb_app_cdc_printf("GET_ENCODER: Bad response header [%02X %02X]\r\n", rx_data[0], rx_data[1]);
+    if (rx_data[0] != CMD_GET_ENCODER_MAP || rx_data[1] != layer || rx_data[2] != encoder_id) {
+        usb_app_cdc_printf("GET_ENCODER: Bad response header [%02X %02X %02X]\r\n",
+                           rx_data[0], rx_data[1], rx_data[2]);
         return false;
     }
 
-    if (rx_data[6] != STATUS_OK) {
-        usb_app_cdc_printf("GET_ENCODER: Status error %02X\r\n", rx_data[6]);
+    if (rx_data[7] != STATUS_OK) {
+        usb_app_cdc_printf("GET_ENCODER: Status error %02X\r\n", rx_data[7]);
         return false;
     }
 
-    *ccw_keycode = rx_data[2] | (rx_data[3] << 8);
-    *cw_keycode = rx_data[4] | (rx_data[5] << 8);
+    *ccw_keycode = rx_data[3] | (rx_data[4] << 8);
+    *cw_keycode = rx_data[5] | (rx_data[6] << 8);
 
-    usb_app_cdc_printf("GET_ENCODER: [%d] CCW=0x%04X CW=0x%04X\r\n", encoder_id, *ccw_keycode, *cw_keycode);
+    usb_app_cdc_printf("GET_ENCODER: [L%d,%d] CCW=0x%04X CW=0x%04X\r\n", layer, encoder_id, *ccw_keycode, *cw_keycode);
     return true;
 }
 
-static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
+static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
 {
     uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
         CMD_SET_ENCODER_MAP,
+        layer,
         encoder_id,
         ccw_keycode & 0xFF,
         (ccw_keycode >> 8) & 0xFF,
@@ -360,7 +380,7 @@ static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t encoder_id, uint16
         return false;
     }
 
-    usb_app_cdc_printf("SET_ENCODER: [%d] CCW=0x%04X CW=0x%04X OK\r\n", encoder_id, ccw_keycode, cw_keycode);
+    usb_app_cdc_printf("SET_ENCODER: [L%d,%d] CCW=0x%04X CW=0x%04X OK\r\n", layer, encoder_id, ccw_keycode, cw_keycode);
     return true;
 }
 
@@ -500,6 +520,14 @@ bool config_protocol_process_packet(const config_packet_t *packet)
             handle_get_layout_info(&tx_packet);
             break;
 
+        case CMD_SET_LAYER_STATE:
+            handle_set_layer_state(packet, &tx_packet);
+            break;
+
+        case CMD_GET_LAYER_STATE:
+            handle_get_layer_state(&tx_packet);
+            break;
+
         case CMD_MIDI_SEND_RAW:
             handle_midi_send_raw(packet, &tx_packet);
             break;
@@ -636,6 +664,7 @@ static void handle_get_info(config_packet_t *response)
     info->matrix_rows = MATRIX_ROWS;
     info->matrix_cols = MATRIX_COLS;
     info->encoder_count = ENCODER_COUNT;
+    info->layer_count = KEYMAP_LAYER_COUNT;
     info->i2c_devices = detected_slave_count; // Return actual count of detected slaves
     // Copy device name manually
     const char name[] = "OpenGrader Modular";
@@ -654,26 +683,27 @@ static void handle_get_info(config_packet_t *response)
 
 static void handle_get_keymap(const config_packet_t *request, config_packet_t *response)
 {
-    if (request->payload_length < 2) {
+    if (request->payload_length < 3) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
-    
-    uint8_t row = request->payload[0];
-    uint8_t col = request->payload[1];
-    
-    if (row >= MATRIX_ROWS || col >= MATRIX_COLS) {
+
+    uint8_t layer = request->payload[0];
+    uint8_t row = request->payload[1];
+    uint8_t col = request->payload[2];
+
+    if (layer >= KEYMAP_LAYER_COUNT || row >= MATRIX_ROWS || col >= MATRIX_COLS) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
-    
+
     keymap_entry_t *entry = (keymap_entry_t*)response->payload;
+    entry->layer = layer;
     entry->row = row;
     entry->col = col;
-    entry->keycode = keymap_get_keycode(row, col);
-    
+    entry->keycode = keymap_get_keycode(layer, row, col);
+
     response->payload_length = sizeof(keymap_entry_t);
-    
 }
 
 static void handle_set_keymap(const config_packet_t *request, config_packet_t *response)
@@ -684,43 +714,45 @@ static void handle_set_keymap(const config_packet_t *request, config_packet_t *r
     }
     
     const keymap_entry_t *entry = (const keymap_entry_t*)request->payload;
-    
-    if (entry->row >= MATRIX_ROWS || entry->col >= MATRIX_COLS) {
+
+    if (entry->layer >= KEYMAP_LAYER_COUNT || entry->row >= MATRIX_ROWS || entry->col >= MATRIX_COLS) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
     
     // Set keycode in EEPROM
-    if (keymap_set_keycode(entry->row, entry->col, entry->keycode)) {
+    if (keymap_set_keycode(entry->layer, entry->row, entry->col, entry->keycode)) {
         response->status = STATUS_OK;
     } else {
         response->status = STATUS_ERROR;
     }
     
     usb_app_cdc_printf("Config: Set keymap [%d,%d] = 0x%04X\r\n", 
-                 entry->row, entry->col, entry->keycode);
+                 entry->layer, entry->row, entry->col, entry->keycode);
 }
 
 static void handle_get_encoder_map(const config_packet_t *request, config_packet_t *response)
 {
-    if (request->payload_length < 1) {
+    if (request->payload_length < 2) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
-    
-    uint8_t encoder_id = request->payload[0];
-    
-    if (encoder_id >= ENCODER_COUNT) {
+
+    uint8_t layer = request->payload[0];
+    uint8_t encoder_id = request->payload[1];
+
+    if (layer >= KEYMAP_LAYER_COUNT || encoder_id >= ENCODER_COUNT) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
-    
+
     encoder_entry_t *entry = (encoder_entry_t*)response->payload;
+    entry->layer = layer;
     entry->encoder_id = encoder_id;
-    
+
     // Get encoder mapping from EEPROM or default (use local variables to avoid packed member warnings)
     uint16_t ccw_keycode, cw_keycode;
-    if (!keymap_get_encoder_map(encoder_id, &ccw_keycode, &cw_keycode)) {
+    if (!keymap_get_encoder_map(layer, encoder_id, &ccw_keycode, &cw_keycode)) {
         response->status = STATUS_ERROR;
         return;
     }
@@ -729,7 +761,6 @@ static void handle_get_encoder_map(const config_packet_t *request, config_packet
     entry->reserved = 0;
     
     response->payload_length = sizeof(encoder_entry_t);
-   
 }
 
 static void handle_set_encoder_map(const config_packet_t *request, config_packet_t *response)
@@ -741,13 +772,13 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
     
     const encoder_entry_t *entry = (const encoder_entry_t*)request->payload;
     
-    if (entry->encoder_id >= ENCODER_COUNT) {
+    if (entry->layer >= KEYMAP_LAYER_COUNT || entry->encoder_id >= ENCODER_COUNT) {
         response->status = STATUS_INVALID_PARAM;
         return;
     }
     
     // Set encoder mapping in EEPROM
-    if (keymap_set_encoder_map(entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
+    if (keymap_set_encoder_map(entry->layer, entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
         response->status = STATUS_OK;
     } else {
         response->status = STATUS_ERROR;
@@ -817,6 +848,35 @@ static void handle_get_layout_info(config_packet_t *response)
 
     response->payload_length = layout_size;
     usb_app_cdc_printf("Config: Provided layout info (v%u)\r\n", board_layout_info.version);
+}
+
+static void handle_set_layer_state(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t mask = request->payload[0];
+    uint8_t default_layer = request->payload[1];
+
+    keymap_apply_layer_mask(mask, default_layer, true);
+
+    response->payload[0] = keymap_get_layer_mask();
+    response->payload[1] = keymap_get_default_layer();
+    response->payload_length = 2;
+    response->status = STATUS_OK;
+
+    usb_app_cdc_printf("Config: Set layer state mask=0x%02X default=%d\r\n",
+                       response->payload[0], response->payload[1]);
+}
+
+static void handle_get_layer_state(config_packet_t *response)
+{
+    response->payload[0] = keymap_get_layer_mask();
+    response->payload[1] = keymap_get_default_layer();
+    response->payload_length = 2;
+    response->status = STATUS_OK;
 }
 
 static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response)

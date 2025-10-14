@@ -87,6 +87,8 @@ static void configure_i2c_master(void);
 static void configure_i2c_slave(void);
 static void process_slave_key_event(const i2c_key_event_t *event);
 static void process_slave_midi_event(const i2c_midi_event_t *event);
+static void process_slave_layer_state(const i2c_layer_state_t *event);
+static uint8_t first_active_layer(uint8_t mask);
 static void process_i2c_encoder_state_machine(void);
 static void process_master_event_queue(void);
 static void queue_midi_event(uint8_t event_type, uint8_t channel, uint8_t data1, uint8_t data2);
@@ -180,7 +182,7 @@ static void init_i2c_tx_buffer(void)
     i2c_tx_buffer.key_event.col = 0;
     i2c_tx_buffer.key_event.pressed = 0;
     i2c_tx_buffer.key_event.keycode = 0;
-    i2c_tx_buffer.key_event.padding = 0;
+    i2c_tx_buffer.key_event.layer_mask = keymap_get_layer_mask();
     i2c_tx_buffer.key_event.checksum = i2c_calc_checksum(&i2c_tx_buffer.key_event);
 }
 
@@ -268,6 +270,10 @@ static void process_slave_key_event(const i2c_key_event_t *event)
         return; // Invalid message, ignore
     }
 
+    uint8_t mask = event->layer_mask;
+    uint8_t default_layer = first_active_layer(mask);
+    keymap_apply_layer_mask(mask, default_layer, false);
+
 
     // Check if this is an encoder event (row 254) or regular matrix key
     if (event->row == 254) {
@@ -320,6 +326,37 @@ static void process_slave_midi_event(const i2c_midi_event_t *event)
                      event->event_type, display_channel);
             break;
     }
+}
+
+static uint8_t first_active_layer(uint8_t mask)
+{
+    if (mask == 0) {
+        return 0;
+    }
+
+    for (uint8_t idx = 0; idx < KEYMAP_LAYER_COUNT; idx++) {
+        if ((mask & (uint8_t)(1u << idx)) != 0) {
+            return idx;
+        }
+    }
+
+    return 0;
+}
+
+static void process_slave_layer_state(const i2c_layer_state_t *event)
+{
+    if (!i2c_validate_layer_message(event)) {
+        return;
+    }
+
+    uint8_t mask = event->layer_mask;
+    uint8_t default_layer = event->default_layer;
+
+    if (default_layer >= KEYMAP_LAYER_COUNT) {
+        default_layer = first_active_layer(mask);
+    }
+
+    keymap_apply_layer_mask(mask, default_layer, false);
 }
 
 /* I2C master: burst poll to drain slave FIFO quickly */
@@ -466,12 +503,85 @@ void i2c_manager_send_key_event(uint8_t row, uint8_t col, uint8_t pressed, uint8
     message.key_event.col = col;
     message.key_event.pressed = pressed;
     message.key_event.keycode = keycode;
-    message.key_event.padding = 0;
+    message.key_event.layer_mask = keymap_get_layer_mask();
     message.key_event.checksum = i2c_calc_checksum(&message.key_event);
 
     // Add to FIFO queue for transmission
     if (!i2c_fifo_push(&message)) {
         usb_app_cdc_printf("Failed to queue I2C event: row=%d, col=%d, pressed=%d\r\n", row, col, pressed);
+    }
+}
+
+void i2c_manager_send_layer_state(uint8_t layer_mask, uint8_t default_layer)
+{
+    i2c_message_t message = {0};
+    message.layer_state.header = I2C_MSG_HEADER;
+    message.layer_state.msg_type = I2C_MSG_LAYER_STATE;
+    message.layer_state.layer_mask = layer_mask;
+    message.layer_state.default_layer = default_layer;
+    message.layer_state.reserved0 = 0;
+    message.layer_state.reserved1 = 0;
+    message.layer_state.reserved2 = 0;
+    message.layer_state.checksum = i2c_calc_layer_checksum(&message.layer_state);
+
+    if (!i2c_fifo_push(&message)) {
+        usb_app_cdc_printf("Failed to queue I2C layer state: mask=0x%02X default=%d\r\n", layer_mask, default_layer);
+    }
+}
+
+void i2c_manager_broadcast_layer_state(uint8_t layer_mask, uint8_t default_layer)
+{
+    if (current_i2c_mode == 0xFF) {
+        return;
+    }
+
+    if (current_i2c_mode == 0) {
+        // In slave mode, queue update for the master
+        i2c_manager_send_layer_state(layer_mask, default_layer);
+        return;
+    }
+
+    if (detected_slave_count == 0) {
+        i2c_manager_scan_slaves();
+    }
+
+    if (detected_slave_count == 0) {
+        return;
+    }
+
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
+        CMD_SET_LAYER_STATE,
+        layer_mask,
+        default_layer,
+        0,
+        0,
+        0,
+        0
+    };
+    uint8_t rx_data[2] = {0};
+
+    for (uint8_t idx = 0; idx < detected_slave_count; idx++) {
+        uint8_t address = detected_slaves[idx];
+        if (address == 0) {
+            continue;
+        }
+
+        if (HAL_I2C_Master_Transmit(&hi2c2, address << 1, tx_data, sizeof(tx_data), 100) != HAL_OK) {
+            usb_app_cdc_printf("LAYER_STATE: TX failed to 0x%02X\r\n", address);
+            continue;
+        }
+
+        HAL_Delay(5);
+
+        if (HAL_I2C_Master_Receive(&hi2c2, address << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+            usb_app_cdc_printf("LAYER_STATE: RX failed from 0x%02X\r\n", address);
+            continue;
+        }
+
+        if (rx_data[0] != CMD_SET_LAYER_STATE || rx_data[1] != STATUS_OK) {
+            usb_app_cdc_printf("LAYER_STATE: Bad response from 0x%02X [%02X %02X]\r\n",
+                               address, rx_data[0], rx_data[1]);
+        }
     }
 }
 
@@ -531,6 +641,8 @@ void i2c_manager_poll_slaves(void)
                     }
                 } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_MIDI_EVENT) {
                     process_slave_midi_event(&i2c_rx_buffer.midi_event);
+                } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_LAYER_STATE) {
+                    process_slave_layer_state(&i2c_rx_buffer.layer_state);
                 } else {
                     // Invalid message type, assume FIFO is empty
                     break;
@@ -566,8 +678,8 @@ void i2c_manager_process_local_key_event(uint8_t row, uint8_t col, uint8_t press
         .col = col,
         .pressed = pressed,
         .keycode = keycode,
-        .checksum = 0,
-        .padding = 0
+        .layer_mask = keymap_get_layer_mask(),
+        .checksum = 0
     };
 
     event.checksum = i2c_calc_checksum(&event);
@@ -659,7 +771,7 @@ void i2c_manager_addr_callback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirectio
                     i2c_tx_buffer.key_event.col = 0;
                     i2c_tx_buffer.key_event.pressed = 0;
                     i2c_tx_buffer.key_event.keycode = 0;
-                    i2c_tx_buffer.key_event.padding = 0;
+                    i2c_tx_buffer.key_event.layer_mask = keymap_get_layer_mask();
                     i2c_tx_buffer.key_event.checksum = i2c_calc_checksum(&i2c_tx_buffer.key_event);
                     i2c_slave_state = I2C_SLAVE_STATE_BUSY; // Still need to wait for this TX to finish
                     HAL_I2C_Slave_Seq_Transmit_IT(hi2c, (uint8_t*)&i2c_tx_buffer, sizeof(i2c_message_t), I2C_FIRST_AND_LAST_FRAME);
@@ -674,7 +786,7 @@ void i2c_manager_addr_callback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirectio
                 i2c_tx_buffer.key_event.col = 0;
                 i2c_tx_buffer.key_event.pressed = 0;
                 i2c_tx_buffer.key_event.keycode = 0;
-                i2c_tx_buffer.key_event.padding = 0;
+                i2c_tx_buffer.key_event.layer_mask = keymap_get_layer_mask();
                 i2c_tx_buffer.key_event.checksum = i2c_calc_checksum(&i2c_tx_buffer.key_event);
                 // We don't set state to busy here because we want the ongoing transmission to complete normally
                 HAL_I2C_Slave_Seq_Transmit_IT(hi2c, (uint8_t*)&i2c_tx_buffer, sizeof(i2c_message_t), I2C_FIRST_AND_LAST_FRAME);
@@ -690,75 +802,99 @@ void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c)
         
         // Process received command
         if (i2c_slave_rx_buffer[0] == CMD_GET_KEYMAP) {
-            // Master is requesting keymap entry
-            uint8_t row = i2c_slave_rx_buffer[1];
-            uint8_t col = i2c_slave_rx_buffer[2];
-            
-            // Get keycode from our local keymap
-            extern uint16_t keymap_get_keycode(uint8_t row, uint8_t col);
-            uint16_t keycode = keymap_get_keycode(row, col);
-            
-            // Prepare simple 4-byte response: [CMD, keycode_low, keycode_high, status]
+            uint8_t layer = i2c_slave_rx_buffer[1];
+            uint8_t row = i2c_slave_rx_buffer[2];
+            uint8_t col = i2c_slave_rx_buffer[3];
+            uint16_t keycode = keymap_get_keycode(layer, row, col);
+
             memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
             i2c_slave_config_response[0] = CMD_GET_KEYMAP;
-            i2c_slave_config_response[1] = keycode & 0xFF;
-            i2c_slave_config_response[2] = (keycode >> 8) & 0xFF;
-            i2c_slave_config_response[3] = STATUS_OK;
-            i2c_slave_config_response_length = 4;
+            i2c_slave_config_response[1] = layer;
+            i2c_slave_config_response[2] = row;
+            i2c_slave_config_response[3] = col;
+            i2c_slave_config_response[4] = keycode & 0xFF;
+            i2c_slave_config_response[5] = (keycode >> 8) & 0xFF;
+            i2c_slave_config_response[6] = STATUS_OK;
+            i2c_slave_config_response_length = 7;
             i2c_slave_has_config_response = 1;
-            
-            usb_app_cdc_printf("SLAVE RX: GET[%d,%d] = 0x%04X\r\n", row, col, keycode);
+
+            usb_app_cdc_printf("SLAVE RX: GET[L%d,%d,%d] = 0x%04X\r\n", layer, row, col, keycode);
         }
         else if (i2c_slave_rx_buffer[0] == CMD_SET_KEYMAP) {
-            // Master is setting keymap entry
-            uint8_t row = i2c_slave_rx_buffer[1];
-            uint8_t col = i2c_slave_rx_buffer[2];
-            uint16_t keycode = i2c_slave_rx_buffer[3] | (i2c_slave_rx_buffer[4] << 8);
-            
-            // Set keycode in our local keymap
-            bool success = keymap_set_keycode(row, col, keycode);
-            
-            // Prepare simple 2-byte response: [CMD, status]
+            uint8_t layer = i2c_slave_rx_buffer[1];
+            uint8_t row = i2c_slave_rx_buffer[2];
+            uint8_t col = i2c_slave_rx_buffer[3];
+            uint16_t keycode = i2c_slave_rx_buffer[4] | (i2c_slave_rx_buffer[5] << 8);
+
+            bool success = keymap_set_keycode(layer, row, col, keycode);
+
             memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
             i2c_slave_config_response[0] = CMD_SET_KEYMAP;
             i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
             i2c_slave_config_response_length = 2;
             i2c_slave_has_config_response = 1;
-            
-            usb_app_cdc_printf("SLAVE RX: SET[%d,%d] = 0x%04X %s\r\n", 
-                         row, col, keycode, success ? "OK" : "ERR");
+
+            usb_app_cdc_printf("SLAVE RX: SET[L%d,%d,%d] = 0x%04X %s\r\n",
+                         layer, row, col, keycode, success ? "OK" : "ERR");
         }
         else if (i2c_slave_rx_buffer[0] == CMD_GET_ENCODER_MAP) {
-            uint8_t encoder_id = i2c_slave_rx_buffer[1];
+            uint8_t layer = i2c_slave_rx_buffer[1];
+            uint8_t encoder_id = i2c_slave_rx_buffer[2];
             uint16_t ccw_keycode = 0;
             uint16_t cw_keycode = 0;
-            bool success = keymap_get_encoder_map(encoder_id, &ccw_keycode, &cw_keycode);
+            bool success = keymap_get_encoder_map(layer, encoder_id, &ccw_keycode, &cw_keycode);
 
             memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
             i2c_slave_config_response[0] = CMD_GET_ENCODER_MAP;
-            i2c_slave_config_response[1] = encoder_id;
+            i2c_slave_config_response[1] = layer;
+            i2c_slave_config_response[2] = encoder_id;
             if (success) {
-                i2c_slave_config_response[2] = ccw_keycode & 0xFF;
-                i2c_slave_config_response[3] = (ccw_keycode >> 8) & 0xFF;
-                i2c_slave_config_response[4] = cw_keycode & 0xFF;
-                i2c_slave_config_response[5] = (cw_keycode >> 8) & 0xFF;
-                i2c_slave_config_response[6] = STATUS_OK;
+                i2c_slave_config_response[3] = ccw_keycode & 0xFF;
+                i2c_slave_config_response[4] = (ccw_keycode >> 8) & 0xFF;
+                i2c_slave_config_response[5] = cw_keycode & 0xFF;
+                i2c_slave_config_response[6] = (cw_keycode >> 8) & 0xFF;
+                i2c_slave_config_response[7] = STATUS_OK;
             } else {
-                i2c_slave_config_response[6] = STATUS_INVALID_PARAM;
+                i2c_slave_config_response[7] = STATUS_INVALID_PARAM;
             }
-            i2c_slave_config_response_length = 7;
+            i2c_slave_config_response_length = 8;
             i2c_slave_has_config_response = 1;
         }
         else if (i2c_slave_rx_buffer[0] == CMD_SET_ENCODER_MAP) {
-            uint8_t encoder_id = i2c_slave_rx_buffer[1];
-            uint16_t ccw_keycode = i2c_slave_rx_buffer[2] | (i2c_slave_rx_buffer[3] << 8);
-            uint16_t cw_keycode = i2c_slave_rx_buffer[4] | (i2c_slave_rx_buffer[5] << 8);
-            bool success = keymap_set_encoder_map(encoder_id, ccw_keycode, cw_keycode);
+            uint8_t layer = i2c_slave_rx_buffer[1];
+            uint8_t encoder_id = i2c_slave_rx_buffer[2];
+            uint16_t ccw_keycode = i2c_slave_rx_buffer[3] | (i2c_slave_rx_buffer[4] << 8);
+            uint16_t cw_keycode = i2c_slave_rx_buffer[5] | (i2c_slave_rx_buffer[6] << 8);
+            bool success = keymap_set_encoder_map(layer, encoder_id, ccw_keycode, cw_keycode);
 
             memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
             i2c_slave_config_response[0] = CMD_SET_ENCODER_MAP;
             i2c_slave_config_response[1] = success ? STATUS_OK : STATUS_ERROR;
             i2c_slave_config_response_length = 2;
+            i2c_slave_has_config_response = 1;
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_SET_LAYER_STATE) {
+            uint8_t mask = i2c_slave_rx_buffer[1];
+            uint8_t def_layer = i2c_slave_rx_buffer[2];
+            keymap_apply_layer_mask(mask, def_layer, false);
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_SET_LAYER_STATE;
+            i2c_slave_config_response[1] = STATUS_OK;
+            i2c_slave_config_response_length = 2;
+            i2c_slave_has_config_response = 1;
+            usb_app_cdc_printf("SLAVE RX: layer state updated mask=0x%02X default=%d\r\n", mask, def_layer);
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_GET_LAYER_STATE) {
+            uint8_t mask = keymap_get_layer_mask();
+            uint8_t def_layer = keymap_get_default_layer();
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_GET_LAYER_STATE;
+            i2c_slave_config_response[1] = mask;
+            i2c_slave_config_response[2] = def_layer;
+            i2c_slave_config_response[6] = STATUS_OK;
+            i2c_slave_config_response_length = 7;
             i2c_slave_has_config_response = 1;
         }
         else if (i2c_slave_rx_buffer[0] == CMD_SAVE_CONFIG) {
@@ -812,4 +948,19 @@ void i2c_manager_error_callback(I2C_HandleTypeDef *hi2c)
         // Always re-enable listening after an error
         HAL_I2C_EnableListen_IT(hi2c);
     }
+}
+
+void i2c_manager_handle_slave_key_event(const i2c_key_event_t *event)
+{
+    process_slave_key_event(event);
+}
+
+void i2c_manager_handle_slave_midi_event(const i2c_midi_event_t *event)
+{
+    process_slave_midi_event(event);
+}
+
+void i2c_manager_handle_slave_layer_state(const i2c_layer_state_t *event)
+{
+    process_slave_layer_state(event);
 }

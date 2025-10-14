@@ -60,14 +60,17 @@ void matrix_scan(void)
             if (pressed != state[r][c])
             {
                 state[r][c] = pressed;
-                uint16_t kc = keymap_get_keycode(r, c);
-                
+                uint16_t kc = keymap_get_active_keycode(r, c);
+
                 // Handle MIDI keycodes
                 midi_handle_keycode(kc, pressed);
-                
-                if (user_cb)
+
+                uint8_t hid = 0;
+                bool should_send = keymap_translate_keycode(kc, pressed, &hid);
+
+                if (should_send && user_cb)
                 {
-                    user_cb(r, c, pressed, (uint8_t)op_keycode_to_hid(kc));
+                    user_cb(r, c, pressed, hid);
                 }
             }
         }

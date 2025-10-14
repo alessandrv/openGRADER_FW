@@ -2,7 +2,21 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  *   // Initialize WS2812 LED strip
+  usb_app_cdc_printf("Initializing WS2812 on PC10...\r\n");
+  ws2812_init();
+  
+  // Simple test without using the strip structure or brightness scaling
+  usb_app_cdc_printf("Running simple WS2812 test (3 LEDs: R,G,B)...\r\n");
+  ws2812_simple_test();
+  HAL_Delay(3000);
+  
+  // Now initialize the full strip for normal operation
+  ws2812_strip_init(&led_strip, 8); // Initialize with 8 LEDs (adjust as needed)
+  ws2812_set_brightness(&led_strip, 255); // Full brightness for now
+  ws2812_clear(&led_strip);
+  ws2812_update(&led_strip);
+  usb_app_cdc_printf("WS2812 initialization complete\r\n");     : Main program body
   ******************************************************************************
   * @attention
   *
@@ -32,6 +46,7 @@
 #include "i2c.h"
 #include "i2c_manager.h"
 #include "tusb.h"
+#include "ws2812.h"
 #ifndef USB_DEMO_ENABLE_MOUSE
 #define USB_DEMO_ENABLE_MOUSE 0
 #endif
@@ -66,6 +81,9 @@ static uint32_t last_usb_check = 0;
 #define FORCE_SLAVE_MODE 0
 #endif
 
+// WS2812 LED strip
+static ws2812_strip_t led_strip;
+
 /* Matrix event callback (file scope) */
 static void matrix_cb(uint8_t row, uint8_t col, uint8_t pressed, uint8_t keycode)
 {
@@ -73,10 +91,24 @@ static void matrix_cb(uint8_t row, uint8_t col, uint8_t pressed, uint8_t keycode
   usb_app_cdc_printf("Key %s: row=%d, col=%d, keycode=0x%02X\r\n", 
                pressed ? "PRESSED" : "RELEASED", row, col, keycode);
   
+  // No visual feedback on LED strip to avoid flashing
+  // (LEDs will maintain their master/slave status colors)
+  
   (void)row; (void)col; // unused in this simple handler
   if (keycode == 0) return;
 
   i2c_manager_process_local_key_event(row, col, pressed, keycode);
+}
+
+static void ws2812_apply_mode(uint8_t master_mode)
+{
+  if (master_mode) {
+    usb_app_cdc_printf("LED: Master mode - single red LED\r\n");
+    ws2812_send_red();
+  } else {
+    usb_app_cdc_printf("LED: Slave mode - single blue LED\r\n");
+    ws2812_send_blue();
+  }
 }
 
 
@@ -133,6 +165,18 @@ int main(void)
   matrix_init();
   i2c_manager_init();
   
+  // Initialize WS2812 LED strip
+  ws2812_init();
+  ws2812_strip_init(&led_strip, 35); // Initialize with 8 LEDs (adjust as needed)
+  ws2812_set_brightness(&led_strip, 50); // Set to 20% brightness to avoid too much current draw
+  
+  // Initial LED test pattern
+  ws2812_fill(&led_strip, 0, 255, 0); // Green startup color
+  ws2812_update(&led_strip);
+  HAL_Delay(500);
+  ws2812_clear(&led_strip);
+  ws2812_update(&led_strip);
+  
   // Initialize keymap and EEPROM after I2C is set up
   keymap_init();
   
@@ -144,6 +188,7 @@ int main(void)
   is_usb_connected = tud_connected();
 #endif
   i2c_manager_set_mode(is_usb_connected);
+  ws2812_apply_mode(is_usb_connected);
   
   matrix_register_callback(matrix_cb);
   usb_app_cdc_printf("TinyUSB composite with keyboard initialized\r\n");
@@ -159,10 +204,11 @@ int main(void)
     usb_app_task();
     matrix_scan();
     encoder_task();
-  key_state_task();
+    key_state_task();
     
     // Check USB connection status periodically for master/slave switching
     uint32_t now = HAL_GetTick();
+    
     if ((now - last_usb_check) >= USB_CHECK_INTERVAL_MS) {
       last_usb_check = now;
 #if FORCE_SLAVE_MODE
@@ -176,6 +222,7 @@ int main(void)
         usb_app_cdc_printf("USB %s, switching to %s mode\r\n", 
                      is_usb_connected ? "connected" : "disconnected",
                      is_usb_connected ? "master" : "slave");
+        ws2812_apply_mode(is_usb_connected);
       }
       
 

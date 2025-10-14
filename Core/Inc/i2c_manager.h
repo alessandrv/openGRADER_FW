@@ -17,6 +17,7 @@ void i2c_manager_task(void);
 
 /* Slave mode functions */
 void i2c_manager_send_key_event(uint8_t row, uint8_t col, uint8_t pressed, uint8_t keycode);
+void i2c_manager_send_layer_state(uint8_t layer_mask, uint8_t default_layer);
 void i2c_manager_send_midi_cc(uint8_t channel, uint8_t controller, uint8_t value);
 void i2c_manager_send_midi_note(uint8_t channel, uint8_t note, uint8_t velocity, bool pressed);
 
@@ -24,6 +25,10 @@ void i2c_manager_send_midi_note(uint8_t channel, uint8_t note, uint8_t velocity,
 void i2c_manager_poll_slaves(void);
 void i2c_manager_scan_slaves(void);
 void i2c_manager_process_local_key_event(uint8_t row, uint8_t col, uint8_t pressed, uint8_t keycode);
+void i2c_manager_handle_slave_key_event(const i2c_key_event_t *event);
+void i2c_manager_handle_slave_midi_event(const i2c_midi_event_t *event);
+void i2c_manager_handle_slave_layer_state(const i2c_layer_state_t *event);
+void i2c_manager_broadcast_layer_state(uint8_t layer_mask, uint8_t default_layer);
 
 /* Encoder callback for slave mode */
 void i2c_manager_encoder_callback(uint8_t encoder_idx, uint8_t direction, uint8_t keycode);

@@ -3,6 +3,32 @@
 #include "input/keymap.h"
 #include "usb_app.h"
 #include <string.h>
+#include <stddef.h>
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t checksum;
+    uint16_t keymap[MATRIX_ROWS][MATRIX_COLS];
+    uint16_t encoder_map[ENCODER_COUNT][2];
+    uint8_t reserved[64];
+} __attribute__((packed)) eeprom_data_v1_t;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t checksum;
+    uint16_t keymap[KEYMAP_LAYER_COUNT][MATRIX_ROWS][MATRIX_COLS];
+    uint16_t encoder_map[KEYMAP_LAYER_COUNT][ENCODER_COUNT][2];
+    uint8_t reserved[32];
+} __attribute__((packed)) eeprom_data_v2_t;
+
+#define EEPROM_V3_PAYLOAD_OFFSET offsetof(eeprom_data_t, keymap)
+#define EEPROM_V3_PAYLOAD_SIZE   (sizeof(eeprom_data_t) - EEPROM_V3_PAYLOAD_OFFSET)
+#define EEPROM_V2_PAYLOAD_OFFSET offsetof(eeprom_data_v2_t, keymap)
+#define EEPROM_V2_PAYLOAD_SIZE   (sizeof(eeprom_data_v2_t) - EEPROM_V2_PAYLOAD_OFFSET)
+#define EEPROM_V1_PAYLOAD_OFFSET offsetof(eeprom_data_v1_t, keymap)
+#define EEPROM_V1_PAYLOAD_SIZE   (sizeof(eeprom_data_v1_t) - EEPROM_V1_PAYLOAD_OFFSET)
 
 // Private variables
 static eeprom_data_t eeprom_data;
@@ -39,6 +65,7 @@ bool eeprom_init(void)
     if (eeprom_save_config()) {
         eeprom_initialized = true;
         config_modified = false;
+        
         usb_app_cdc_printf("EEPROM: Default configuration saved and active\r\n");
         return true;
     }
@@ -70,10 +97,8 @@ bool eeprom_save_config(void)
     eeprom_data.version = EEPROM_VERSION;
     
     // Calculate checksum (excluding the checksum field itself)
-    uint32_t data_size = sizeof(eeprom_data_t) - sizeof(uint32_t);
-    
-    eeprom_data.checksum = calculate_crc32((uint8_t*)&eeprom_data + sizeof(uint32_t) * 3, 
-                                          data_size - sizeof(uint32_t) * 2);
+    eeprom_data.checksum = calculate_crc32(((const uint8_t*)&eeprom_data) + EEPROM_V3_PAYLOAD_OFFSET,
+                                           EEPROM_V3_PAYLOAD_SIZE);
     
     // Erase flash page
     if (!flash_erase_page(EEPROM_START_ADDRESS)) {
@@ -107,10 +132,8 @@ bool eeprom_force_save_config(void)
     eeprom_data.version = EEPROM_VERSION;
     
     // Calculate checksum (excluding the checksum field itself)
-    uint32_t data_size = sizeof(eeprom_data_t) - sizeof(uint32_t);
-    
-    eeprom_data.checksum = calculate_crc32((uint8_t*)&eeprom_data + sizeof(uint32_t) * 3, 
-                                          data_size - sizeof(uint32_t) * 2);
+    eeprom_data.checksum = calculate_crc32(((const uint8_t*)&eeprom_data) + EEPROM_V3_PAYLOAD_OFFSET,
+                                           EEPROM_V3_PAYLOAD_SIZE);
     
     usb_app_cdc_printf("EEPROM: Calculated checksum: 0x%08lX\r\n", eeprom_data.checksum);
     
@@ -137,32 +160,100 @@ bool eeprom_force_save_config(void)
 // Load configuration from flash
 bool eeprom_load_config(void)
 {
-    // Read data from flash
-    memcpy(&eeprom_data, (void*)EEPROM_START_ADDRESS, sizeof(eeprom_data_t));
-    
-    // Validate magic number
-    if (eeprom_data.magic != EEPROM_MAGIC) {
-        // This is normal for first boot - don't spam with error messages
+    eeprom_data_t candidate = {0};
+    memcpy(&candidate, (void*)EEPROM_START_ADDRESS, sizeof(eeprom_data_t));
+
+    if (candidate.magic != EEPROM_MAGIC) {
         return false;
     }
-    
-    // Check version compatibility
-    if (eeprom_data.version != EEPROM_VERSION) {
-        usb_app_cdc_printf("EEPROM: Version mismatch: %lu != %d (will use defaults)\r\n", eeprom_data.version, EEPROM_VERSION);
-        return false;
+
+    if (candidate.version == EEPROM_VERSION) {
+        uint32_t calculated_checksum = calculate_crc32(((const uint8_t*)&candidate) + EEPROM_V3_PAYLOAD_OFFSET,
+                                                       EEPROM_V3_PAYLOAD_SIZE);
+        if (candidate.checksum != calculated_checksum) {
+            usb_app_cdc_printf("EEPROM: Checksum mismatch for v3 data (will use defaults)\r\n");
+            return false;
+        }
+
+        eeprom_data = candidate;
+        return true;
     }
-    
-    // Verify checksum
-    uint32_t data_size = sizeof(eeprom_data_t) - sizeof(uint32_t);
-    uint32_t calculated_checksum = calculate_crc32((uint8_t*)&eeprom_data + sizeof(uint32_t) * 3, 
-                                                  data_size - sizeof(uint32_t) * 2);
-    
-    if (eeprom_data.checksum != calculated_checksum) {
-        usb_app_cdc_printf("EEPROM: Checksum mismatch (will use defaults)\r\n");
-        return false;
+
+    if (candidate.version == 2) {
+        eeprom_data_v2_t legacy2 = {0};
+        memcpy(&legacy2, (void*)EEPROM_START_ADDRESS, sizeof(eeprom_data_v2_t));
+
+        uint32_t calculated_checksum = calculate_crc32(((const uint8_t*)&legacy2) + EEPROM_V2_PAYLOAD_OFFSET,
+                                                       EEPROM_V2_PAYLOAD_SIZE);
+        if (legacy2.checksum != calculated_checksum) {
+            usb_app_cdc_printf("EEPROM: v2 checksum mismatch (will use defaults)\r\n");
+            return false;
+        }
+
+        usb_app_cdc_printf("EEPROM: Migrating v2 data to multilayer layout with layer state\r\n");
+
+        memset(&eeprom_data, 0, sizeof(eeprom_data));
+        eeprom_data.magic = EEPROM_MAGIC;
+        eeprom_data.version = EEPROM_VERSION;
+
+        memcpy(eeprom_data.keymap, legacy2.keymap, sizeof(legacy2.keymap));
+        memcpy(eeprom_data.encoder_map, legacy2.encoder_map, sizeof(legacy2.encoder_map));
+        eeprom_data.startup_layer_mask = 0x01;
+        eeprom_data.default_layer = 0;
+
+        config_modified = true;
+        return true;
     }
-    
-    return true;
+
+    if (candidate.version == 1) {
+        eeprom_data_v1_t legacy = {0};
+        memcpy(&legacy, (void*)EEPROM_START_ADDRESS, sizeof(eeprom_data_v1_t));
+
+        uint32_t calculated_checksum = calculate_crc32(((const uint8_t*)&legacy) + EEPROM_V1_PAYLOAD_OFFSET,
+                                                       EEPROM_V1_PAYLOAD_SIZE);
+        if (legacy.checksum != calculated_checksum) {
+            usb_app_cdc_printf("EEPROM: Legacy checksum mismatch (will use defaults)\r\n");
+            return false;
+        }
+
+        usb_app_cdc_printf("EEPROM: Migrating legacy v1 data to multilayer layout\r\n");
+
+        memset(&eeprom_data, 0, sizeof(eeprom_data));
+        eeprom_data.magic = EEPROM_MAGIC;
+        eeprom_data.version = EEPROM_VERSION;
+
+        for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; layer++) {
+            for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
+                for (uint8_t col = 0; col < MATRIX_COLS; col++) {
+                    if (layer == 0) {
+                        eeprom_data.keymap[layer][row][col] = legacy.keymap[row][col];
+                    } else {
+                        eeprom_data.keymap[layer][row][col] = KC_TRANSPARENT;
+                    }
+                }
+            }
+        }
+
+        for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; layer++) {
+            for (uint8_t idx = 0; idx < ENCODER_COUNT; idx++) {
+                if (layer == 0) {
+                    eeprom_data.encoder_map[layer][idx][0] = legacy.encoder_map[idx][0];
+                    eeprom_data.encoder_map[layer][idx][1] = legacy.encoder_map[idx][1];
+                } else {
+                    eeprom_data.encoder_map[layer][idx][0] = KC_TRANSPARENT;
+                    eeprom_data.encoder_map[layer][idx][1] = KC_TRANSPARENT;
+                }
+            }
+        }
+
+        eeprom_data.startup_layer_mask = 0x01;
+        eeprom_data.default_layer = 0;
+        config_modified = true; // ensure we rewrite in new format
+        return true;
+    }
+
+    usb_app_cdc_printf("EEPROM: Unsupported data version %lu\r\n", candidate.version);
+    return false;
 }
 
 // Reset configuration to defaults
@@ -180,9 +271,9 @@ bool eeprom_is_valid(void)
 }
 
 // Set keycode for specific position
-bool eeprom_set_keycode(uint8_t row, uint8_t col, uint16_t keycode)
+bool eeprom_set_keycode(uint8_t layer, uint8_t row, uint8_t col, uint16_t keycode)
 {
-    if (row >= MATRIX_ROWS || col >= MATRIX_COLS) {
+    if (layer >= KEYMAP_LAYER_COUNT || row >= MATRIX_ROWS || col >= MATRIX_COLS) {
         return false;
     }
     
@@ -192,19 +283,19 @@ bool eeprom_set_keycode(uint8_t row, uint8_t col, uint16_t keycode)
         }
     }
     
-    if (eeprom_data.keymap[row][col] != keycode) {
-        eeprom_data.keymap[row][col] = keycode;
+    if (eeprom_data.keymap[layer][row][col] != keycode) {
+        eeprom_data.keymap[layer][row][col] = keycode;
         config_modified = true;
-        usb_app_cdc_printf("EEPROM: Keymap[%d][%d] = 0x%04X\r\n", row, col, keycode);
+        usb_app_cdc_printf("EEPROM: Keymap[L%d][%d][%d] = 0x%04X\r\n", layer, row, col, keycode);
     }
     
     return true;
 }
 
 // Get keycode for specific position
-uint16_t eeprom_get_keycode(uint8_t row, uint8_t col)
+uint16_t eeprom_get_keycode(uint8_t layer, uint8_t row, uint8_t col)
 {
-    if (row >= MATRIX_ROWS || col >= MATRIX_COLS) {
+    if (layer >= KEYMAP_LAYER_COUNT || row >= MATRIX_ROWS || col >= MATRIX_COLS) {
         return 0;
     }
     
@@ -215,58 +306,109 @@ uint16_t eeprom_get_keycode(uint8_t row, uint8_t col)
         }
     }
     
-    return eeprom_data.keymap[row][col];
+    return eeprom_data.keymap[layer][row][col];
 }
 
 // Set encoder mapping
-bool eeprom_set_encoder_map(uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
+bool eeprom_set_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode)
 {
-    if (encoder_id >= ENCODER_COUNT) {
+    if (layer >= KEYMAP_LAYER_COUNT || encoder_id >= ENCODER_COUNT) {
         return false;
     }
-    
+
     if (!eeprom_initialized) {
         if (!eeprom_init()) {
             return false;
         }
     }
-    
+
     bool changed = false;
-    if (eeprom_data.encoder_map[encoder_id][0] != ccw_keycode) {
-        eeprom_data.encoder_map[encoder_id][0] = ccw_keycode;
+    if (eeprom_data.encoder_map[layer][encoder_id][0] != ccw_keycode) {
+        eeprom_data.encoder_map[layer][encoder_id][0] = ccw_keycode;
         changed = true;
     }
-    
-    if (eeprom_data.encoder_map[encoder_id][1] != cw_keycode) {
-        eeprom_data.encoder_map[encoder_id][1] = cw_keycode;
+
+    if (eeprom_data.encoder_map[layer][encoder_id][1] != cw_keycode) {
+        eeprom_data.encoder_map[layer][encoder_id][1] = cw_keycode;
         changed = true;
     }
-    
+
     if (changed) {
         config_modified = true;
-        usb_app_cdc_printf("EEPROM: Encoder[%d] = CCW:0x%04X CW:0x%04X\r\n", 
-                     encoder_id, ccw_keycode, cw_keycode);
+        usb_app_cdc_printf("EEPROM: Encoder[L%d][%d] = CCW:0x%04X CW:0x%04X\r\n",
+                           layer, encoder_id, ccw_keycode, cw_keycode);
     }
-    
+
     return true;
 }
 
-// Get encoder mapping
-bool eeprom_get_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
+bool eeprom_get_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode)
 {
-    if (encoder_id >= ENCODER_COUNT || !ccw_keycode || !cw_keycode) {
+    if (layer >= KEYMAP_LAYER_COUNT || encoder_id >= ENCODER_COUNT || !ccw_keycode || !cw_keycode) {
         return false;
     }
-    
+
     if (!eeprom_initialized) {
         if (!eeprom_init()) {
-            // EEPROM init failed, return false to indicate fallback needed
             return false;
         }
     }
-    
-    *ccw_keycode = eeprom_data.encoder_map[encoder_id][0];
-    *cw_keycode = eeprom_data.encoder_map[encoder_id][1];
+
+    *ccw_keycode = eeprom_data.encoder_map[layer][encoder_id][0];
+    *cw_keycode = eeprom_data.encoder_map[layer][encoder_id][1];
+    return true;
+}
+
+bool eeprom_set_layer_state(uint8_t active_mask, uint8_t default_layer)
+{
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    uint8_t sanitized_default = default_layer;
+    if (sanitized_default >= KEYMAP_LAYER_COUNT) {
+        sanitized_default = 0;
+    }
+
+    uint8_t allowed_mask = (KEYMAP_LAYER_COUNT >= 8)
+        ? 0xFF
+        : (uint8_t)((1u << KEYMAP_LAYER_COUNT) - 1u);
+
+    uint8_t sanitized_mask = active_mask & allowed_mask;
+    if (sanitized_mask == 0) {
+        uint16_t startup_bit = (uint16_t)1u << sanitized_default;
+        sanitized_mask = (uint8_t)(startup_bit & 0xFFu);
+        if (sanitized_mask == 0) {
+            sanitized_mask = 1u;
+        }
+    }
+
+    if (eeprom_data.startup_layer_mask != sanitized_mask || eeprom_data.default_layer != sanitized_default) {
+        eeprom_data.startup_layer_mask = sanitized_mask;
+        eeprom_data.default_layer = sanitized_default;
+        config_modified = true;
+        usb_app_cdc_printf("EEPROM: Layer state stored mask=0x%02X default=%u\r\n", sanitized_mask, sanitized_default);
+    }
+
+    return true;
+}
+
+bool eeprom_get_layer_state(uint8_t *active_mask, uint8_t *default_layer)
+{
+    if (!active_mask || !default_layer) {
+        return false;
+    }
+
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    *active_mask = eeprom_data.startup_layer_mask;
+    *default_layer = eeprom_data.default_layer;
     return true;
 }
 
@@ -399,18 +541,25 @@ static void load_default_config(void)
     // Clear the structure
     memset(&eeprom_data, 0, sizeof(eeprom_data_t));
     
-    // Copy default keymap
-    for (int row = 0; row < MATRIX_ROWS; row++) {
-        for (int col = 0; col < MATRIX_COLS; col++) {
-            eeprom_data.keymap[row][col] = keycodes[row][col];
+    // Copy default keymap for all layers
+    for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; layer++) {
+        for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
+            for (uint8_t col = 0; col < MATRIX_COLS; col++) {
+                eeprom_data.keymap[layer][row][col] = keycodes[layer][row][col];
+            }
         }
     }
-    
-    // Copy default encoder map
-    for (int i = 0; i < ENCODER_COUNT; i++) {
-        eeprom_data.encoder_map[i][0] = encoder_map[i][0];
-        eeprom_data.encoder_map[i][1] = encoder_map[i][1];
+
+    // Copy default encoder map for all layers
+    for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; layer++) {
+        for (uint8_t idx = 0; idx < ENCODER_COUNT; idx++) {
+            eeprom_data.encoder_map[layer][idx][0] = encoder_map[layer][idx][0];
+            eeprom_data.encoder_map[layer][idx][1] = encoder_map[layer][idx][1];
+        }
     }
+
+    eeprom_data.startup_layer_mask = 0x01;
+    eeprom_data.default_layer = 0;
     
     config_modified = true;
 }
