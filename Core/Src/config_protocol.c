@@ -602,7 +602,7 @@ bool config_protocol_process_packet(const config_packet_t *packet)
                 bool all_slaves_ok = true;
 
                 if (i2c_manager_get_mode() == 1) {
-                    extern uint8_t detected_slaves[16];
+                    extern uint8_t detected_slaves[I2C_MAX_SLAVE_COUNT];
                     extern uint8_t detected_slave_count;
 
                     i2c_manager_scan_slaves();
@@ -808,11 +808,11 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
 
 static void handle_get_i2c_devices(config_packet_t *response)
 {
-    extern uint8_t detected_slaves[16];
+    extern uint8_t detected_slaves[I2C_MAX_SLAVE_COUNT];
     extern uint8_t detected_slave_count;
     
-    // Force a scan of I2C devices
-    i2c_manager_scan_slaves();
+    // Force a scan of I2C devices to pick up newly attached modules
+    i2c_manager_scan_slaves_force();
 
     // First byte of payload is the count of detected slaves
     response->payload[0] = detected_slave_count;

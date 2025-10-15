@@ -36,7 +36,7 @@ extern I2C_HandleTypeDef hi2c2;
 static uint8_t current_i2c_mode = 0xFF; // 0xFF = uninitialized, 0 = slave, 1 = master
 static uint32_t last_slave_scan = 0;
 #define SLAVE_SCAN_INTERVAL_MS 500
-uint8_t detected_slaves[16]; // Track detected slave addresses
+uint8_t detected_slaves[I2C_MAX_SLAVE_COUNT]; // Track detected slave addresses
 uint8_t detected_slave_count = 0;
 
 /* I2C Event FIFO Queue for handling multiple simultaneous key events */
@@ -84,7 +84,9 @@ static uint8_t i2c_master_fifo_is_empty(void);
 static uint8_t i2c_master_fifo_push(const i2c_key_event_t *event);
 static uint8_t i2c_master_fifo_pop(i2c_key_event_t *event);
 static void init_i2c_tx_buffer(void);
+static void configure_i2c_master_internal(bool force);
 static void configure_i2c_master(void);
+static void configure_i2c_master_force(void);
 static void configure_i2c_slave(void);
 static void process_slave_key_event(const i2c_key_event_t *event);
 static void process_slave_midi_event(const i2c_midi_event_t *event);
@@ -188,14 +190,16 @@ static void init_i2c_tx_buffer(void)
 }
 
 /* Configure I2C2 as master (for when connected to USB host) */
-static void configure_i2c_master(void)
+static void configure_i2c_master_internal(bool force)
 {
-    if (current_i2c_mode == 1) return; // Already master
-    
-    // Deinit current I2C configuration
-    HAL_I2C_DeInit(&hi2c2);
-    
-    // Configure as master
+    if (!force && current_i2c_mode == 1) {
+        return;
+    }
+
+    if (HAL_I2C_GetState(&hi2c2) != HAL_I2C_STATE_RESET) {
+        HAL_I2C_DeInit(&hi2c2);
+    }
+
     hi2c2.Instance = I2C2;
     hi2c2.Init.Timing = 0x00200409;  // 1 MHz Fast Mode Plus
     hi2c2.Init.OwnAddress1 = 0; // Master doesn't need own address
@@ -205,14 +209,24 @@ static void configure_i2c_master(void)
     hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
     hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-    
+
     if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
         Error_Handler();
     }
-    
-    usb_app_cdc_printf("I2C2 configured as MASTER\r\n");
-    
+
+    usb_app_cdc_printf("I2C2 configured as MASTER%s\r\n", force ? " (forced)" : "");
+
     current_i2c_mode = 1; // Master mode
+}
+
+static void configure_i2c_master(void)
+{
+    configure_i2c_master_internal(false);
+}
+
+static void configure_i2c_master_force(void)
+{
+    configure_i2c_master_internal(true);
 }
 
 /* Configure I2C2 as slave (for when not connected to USB host) */
@@ -358,6 +372,17 @@ static void process_slave_layer_state(const i2c_layer_state_t *event)
         return;
     }
 
+    if (current_i2c_mode == 1u) {
+        uint8_t current_mask = keymap_get_layer_mask();
+        uint8_t current_default = keymap_get_default_layer();
+
+        if ((event->layer_mask != current_mask) || (event->default_layer != current_default)) {
+            i2c_manager_broadcast_layer_state(current_mask, current_default);
+        }
+
+        return;
+    }
+
     uint8_t mask = event->layer_mask;
     uint8_t default_layer = event->default_layer;
 
@@ -455,39 +480,79 @@ uint8_t i2c_manager_get_mode(void)
 }
 
 /* I2C master: scan for available slaves */
-void i2c_manager_scan_slaves(void)
+static void i2c_manager_scan_slaves_internal(bool force)
 {
-    uint32_t now = HAL_GetTick();
-    if ((now - last_slave_scan) < SLAVE_SCAN_INTERVAL_MS) {
-        return; // Not time to scan yet, use cached results
-    }
-    
-    last_slave_scan = now;
-    detected_slave_count = 0;
-    
     if (current_i2c_mode != 1) {
         return;
     }
-    
-    // Scan I2C address range (0x08 to 0x77 are valid 7-bit addresses)
-    // Use a faster scan with reduced timeout
-    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-        // Quick ping to see if device responds (reduced timeout to 10ms)
-        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, addr << 1, 1, 10);
-        
+
+    uint32_t now = HAL_GetTick();
+    if (!force && (now - last_slave_scan) < SLAVE_SCAN_INTERVAL_MS) {
+        return;
+    }
+
+    last_slave_scan = now;
+
+    uint8_t new_detected[I2C_MAX_SLAVE_COUNT] = {0};
+    uint8_t new_count = 0;
+    bool attempted_reset = false;
+
+    for (uint8_t offset = 0; offset < I2C_MAX_SLAVE_COUNT; offset++) {
+        uint8_t addr = (uint8_t)(I2C_SLAVE_ADDRESS_BASE + offset);
+        HAL_StatusTypeDef status = HAL_I2C_IsDeviceReady(&hi2c2, (uint16_t)(addr << 1), 3, 10);
+
         if (status == HAL_OK) {
-            // Device found
-            if (detected_slave_count < 16) {
-                detected_slaves[detected_slave_count] = addr;
-                detected_slave_count++;
+            new_detected[new_count++] = addr;
+            continue;
+        }
+
+        if ((status == HAL_BUSY || status == HAL_ERROR) && !attempted_reset) {
+            attempted_reset = true;
+            configure_i2c_master_force();
+            status = HAL_I2C_IsDeviceReady(&hi2c2, (uint16_t)(addr << 1), 3, 10);
+            if (status == HAL_OK) {
+                new_detected[new_count++] = addr;
             }
         }
     }
-    
-    // Only log the final result, not each step
-    if (detected_slave_count > 0) {
-        usb_app_cdc_printf("I2C: Scan found %d slave(s)\r\n", detected_slave_count);
+
+    bool changed = (new_count != detected_slave_count);
+    if (!changed) {
+        for (uint8_t index = 0; index < new_count; index++) {
+            if (detected_slaves[index] != new_detected[index]) {
+                changed = true;
+                break;
+            }
+        }
     }
+
+    if (changed) {
+        memset(detected_slaves, 0, sizeof(detected_slaves));
+        memcpy(detected_slaves, new_detected, new_count);
+        detected_slave_count = new_count;
+
+        if (new_count == 0) {
+            configure_i2c_master_force();
+            usb_app_cdc_printf("I2C: No slaves detected, bus reset\r\n");
+        } else {
+            usb_app_cdc_printf("I2C: Scan found %d slave(s)\r\n", detected_slave_count);
+            uint8_t current_mask = keymap_get_layer_mask();
+            uint8_t current_default = keymap_get_default_layer();
+            i2c_manager_broadcast_layer_state(current_mask, current_default);
+        }
+    } else {
+        detected_slave_count = new_count;
+    }
+}
+
+void i2c_manager_scan_slaves(void)
+{
+    i2c_manager_scan_slaves_internal(false);
+}
+
+void i2c_manager_scan_slaves_force(void)
+{
+    i2c_manager_scan_slaves_internal(true);
 }
 
 void i2c_manager_task(void)
@@ -496,6 +561,7 @@ void i2c_manager_task(void)
         // Slave mode - process encoder state machine
         process_i2c_encoder_state_machine();
     } else if (current_i2c_mode == 1) {
+        i2c_manager_scan_slaves();
         // Master mode - poll slave, drain queue, and update HID state
         i2c_manager_poll_slaves();
         process_master_event_queue();
@@ -629,41 +695,54 @@ void i2c_manager_send_midi_note(uint8_t channel, uint8_t note, uint8_t velocity,
 /* I2C master: poll slaves for key events */
 void i2c_manager_poll_slaves(void)
 {
-    uint16_t slave_addr = 0x42;
-    HAL_StatusTypeDef status;
-    uint8_t events_processed = 0;
-    const uint8_t max_events_per_tick = 16; // Limit to prevent blocking for too long
+    if (current_i2c_mode != 1) {
+        return;
+    }
 
-    for (events_processed = 0; events_processed < max_events_per_tick; events_processed++)
-    {
-    // Clear receive buffer
-    i2c_rx_buffer = (i2c_message_t){0};
-        
-        // Request data from slave
-        status = HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, (uint8_t*)&i2c_rx_buffer, sizeof(i2c_message_t), 10);
-        
-        if (status == HAL_OK) {
-            // Check for a valid message header
-            if (i2c_rx_buffer.common.header == I2C_MSG_HEADER) {
-                if (i2c_rx_buffer.common.msg_type == I2C_MSG_KEY_EVENT) {
-                    if (!i2c_master_fifo_push(&i2c_rx_buffer.key_event)) {
-                        usb_app_cdc_printf("Master FIFO full, dropping key event\r\n");
-                    }
-                } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_MIDI_EVENT) {
-                    process_slave_midi_event(&i2c_rx_buffer.midi_event);
-                } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_LAYER_STATE) {
-                    process_slave_layer_state(&i2c_rx_buffer.layer_state);
-                } else {
-                    // Invalid message type, assume FIFO is empty
-                    break;
+    if (detected_slave_count == 0) {
+        return;
+    }
+
+    const uint8_t max_events_per_slave = 4;
+    const uint8_t overall_max_events = 16;
+    uint8_t total_events = 0;
+
+    for (uint8_t idx = 0; idx < detected_slave_count && total_events < overall_max_events; idx++) {
+        uint8_t slave_addr = detected_slaves[idx];
+        uint8_t events_for_slave = 0;
+
+        while (events_for_slave < max_events_per_slave && total_events < overall_max_events) {
+            i2c_rx_buffer = (i2c_message_t){0};
+
+            HAL_StatusTypeDef status = HAL_I2C_Master_Receive(&hi2c2, (uint16_t)(slave_addr << 1), (uint8_t*)&i2c_rx_buffer, sizeof(i2c_message_t), 10);
+
+            if (status != HAL_OK) {
+                if (status == HAL_ERROR || status == HAL_BUSY) {
+                    usb_app_cdc_printf("Master: RX failed from 0x%02X (status=%d)\r\n", slave_addr, status);
+                    configure_i2c_master_force();
+                    i2c_manager_scan_slaves_force();
                 }
-            } else {
-                // Invalid header, assume FIFO is empty
                 break;
             }
-        } else {
-            // HAL error, stop polling
-            break;
+
+            if (i2c_rx_buffer.common.header != I2C_MSG_HEADER) {
+                break;
+            }
+
+            if (i2c_rx_buffer.common.msg_type == I2C_MSG_KEY_EVENT) {
+                if (!i2c_master_fifo_push(&i2c_rx_buffer.key_event)) {
+                    usb_app_cdc_printf("Master FIFO full, dropping key event\r\n");
+                }
+            } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_MIDI_EVENT) {
+                process_slave_midi_event(&i2c_rx_buffer.midi_event);
+            } else if (i2c_rx_buffer.common.msg_type == I2C_MSG_LAYER_STATE) {
+                process_slave_layer_state(&i2c_rx_buffer.layer_state);
+            } else {
+                break;
+            }
+
+            events_for_slave++;
+            total_events++;
         }
     }
 }
