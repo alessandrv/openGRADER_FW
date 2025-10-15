@@ -6,12 +6,14 @@
 #include "i2c.h"  // Added to include hi2c2 declaration
 #include "pin_config.h"
 #include "eeprom_emulation.h"
+#include "device_info_util.h"
 #include "tusb.h"
 #include "class/hid/hid_device.h"
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 
 // Private variables
 static config_packet_t rx_packet;
@@ -39,6 +41,8 @@ static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row,
 static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
 static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
 static bool send_save_to_slave(uint8_t slave_addr);
+static HAL_StatusTypeDef i2c_master_receive_with_retry(uint8_t slave_addr, uint8_t *buffer, uint16_t length, uint32_t timeout);
+static bool request_device_info_from_slave(uint8_t slave_addr, device_info_t *info);
 static void handle_get_slave_keymap(const config_packet_t *request, config_packet_t *response)
 {
     if (request->payload_length < 4) {
@@ -205,29 +209,18 @@ static void handle_get_slave_info(const config_packet_t *request, config_packet_
         return;
     }
     
-    // For now, just return basic info about the slave
-    // In a more complete implementation, we would query the slave for its info
     device_info_t *info = (device_info_t*)response->payload;
-    
-    info->protocol_version = CONFIG_PROTOCOL_VERSION;
-    info->firmware_version_major = 1;
-    info->firmware_version_minor = 0;
-    info->firmware_version_patch = 0;
-    info->device_type = 0; // 0=Slave
-    info->matrix_rows = MATRIX_ROWS; // Assuming same matrix size as master
-    info->matrix_cols = MATRIX_COLS;
-    info->encoder_count = ENCODER_COUNT;
-    info->i2c_devices = 0; // Slaves don't have I2C devices
-    
-    // Set default name
-    char name[16];
-    sprintf(name, "Slave %02X", slave_addr);
-    memcpy(info->device_name, name, 16);
-    
+    memset(info, 0, sizeof(device_info_t));
+
+    if (!request_device_info_from_slave(slave_addr, info)) {
+        response->status = STATUS_ERROR;
+        return;
+    }
+
     response->payload_length = sizeof(device_info_t);
     response->status = STATUS_OK;
-    
-    usb_app_cdc_printf("Config: Get slave info for device 0x%02X\r\n", slave_addr);
+
+    usb_app_cdc_printf("Config: Get slave info for device 0x%02X (%s)\r\n", slave_addr, info->device_name);
 }
 
 // Helper functions for I2C communication with slaves
@@ -249,9 +242,7 @@ static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t
         return false;
     }
 
-    HAL_Delay(20);
-
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, sizeof(rx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("GET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
@@ -291,9 +282,7 @@ static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row,
         return false;
     }
 
-    HAL_Delay(20);
-
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, sizeof(rx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("SET_KEYMAP: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
@@ -325,9 +314,7 @@ static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_
         return false;
     }
 
-    HAL_Delay(20);
-
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, 8, 100) != HAL_OK) {
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, 8, 100) != HAL_OK) {
         usb_app_cdc_printf("GET_ENCODER: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
@@ -368,9 +355,7 @@ static bool send_encoder_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t enc
         return false;
     }
 
-    HAL_Delay(20);
-
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 100) != HAL_OK) {
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, sizeof(rx_data), 100) != HAL_OK) {
         usb_app_cdc_printf("SET_ENCODER: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
@@ -401,9 +386,7 @@ static bool send_save_to_slave(uint8_t slave_addr)
         return false;
     }
 
-    HAL_Delay(25);
-
-    if (HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, rx_data, sizeof(rx_data), 200) != HAL_OK) {
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, sizeof(rx_data), 200) != HAL_OK) {
         usb_app_cdc_printf("SAVE_CONFIG: RX failed from 0x%02X\r\n", slave_addr);
         return false;
     }
@@ -414,6 +397,55 @@ static bool send_save_to_slave(uint8_t slave_addr)
     }
 
     usb_app_cdc_printf("SAVE_CONFIG: Slave 0x%02X saved successfully\r\n", slave_addr);
+    return true;
+}
+
+static bool request_device_info_from_slave(uint8_t slave_addr, device_info_t *info)
+{
+    if (!info) {
+        return false;
+    }
+
+    uint8_t tx_data[I2C_SLAVE_CONFIG_CMD_SIZE] = {
+        CMD_GET_INFO,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    };
+
+    const uint16_t expected_len = (uint16_t)(1u + sizeof(device_info_t) + 1u);
+    uint8_t rx_data[I2C_SLAVE_CONFIG_MAX_RESPONSE] = {0};
+
+    if (expected_len > I2C_SLAVE_CONFIG_MAX_RESPONSE) {
+        usb_app_cdc_printf("GET_INFO: Expected length %u exceeds buffer\r\n", expected_len);
+        return false;
+    }
+
+    if (HAL_I2C_Master_Transmit(&hi2c2, slave_addr << 1, tx_data, sizeof(tx_data), 200) != HAL_OK) {
+        usb_app_cdc_printf("GET_INFO: TX failed to 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    if (i2c_master_receive_with_retry(slave_addr, rx_data, expected_len, 200) != HAL_OK) {
+        usb_app_cdc_printf("GET_INFO: RX failed from 0x%02X\r\n", slave_addr);
+        return false;
+    }
+
+    if (rx_data[0] != CMD_GET_INFO) {
+        usb_app_cdc_printf("GET_INFO: Bad response header %02X\r\n", rx_data[0]);
+        return false;
+    }
+
+    uint8_t status = rx_data[expected_len - 1u];
+    if (status != STATUS_OK) {
+        usb_app_cdc_printf("GET_INFO: Status %02X from 0x%02X\r\n", status, slave_addr);
+        return false;
+    }
+
+    memcpy(info, &rx_data[1], sizeof(device_info_t));
     return true;
 }
 
@@ -655,30 +687,16 @@ static void handle_get_info(config_packet_t *response)
 {
     extern uint8_t detected_slave_count;
     device_info_t *info = (device_info_t*)response->payload;
-    
-    info->protocol_version = CONFIG_PROTOCOL_VERSION;
-    info->firmware_version_major = 1;
-    info->firmware_version_minor = 0;
-    info->firmware_version_patch = 0;
-    info->device_type = i2c_manager_get_mode(); // 0=Slave, 1=Master
-    info->matrix_rows = MATRIX_ROWS;
-    info->matrix_cols = MATRIX_COLS;
-    info->encoder_count = ENCODER_COUNT;
-    info->layer_count = KEYMAP_LAYER_COUNT;
-    info->i2c_devices = detected_slave_count; // Return actual count of detected slaves
-    // Copy device name manually
-    const char name[] = "OpenGrader Modular";
-    int name_len = 0;
-    while (name[name_len] != '\0' && name_len < 15) name_len++; // Calculate length
-    for (int i = 0; i < name_len && i < 15; i++) {
-        info->device_name[i] = name[i];
-    }
-    info->device_name[name_len] = '\0'; // Null terminate
-    
+
+    uint8_t device_type = i2c_manager_get_mode();
+    uint8_t i2c_devices = (device_type == 1u) ? detected_slave_count : 0u;
+
+    device_info_populate(info, device_type, i2c_devices);
+
     response->payload_length = sizeof(device_info_t);
-    
-    usb_app_cdc_printf("Config: Device info - Type:%d, Matrix:%dx%d, Encoders:%d, I2C:%d\r\n",
-                 info->device_type, info->matrix_rows, info->matrix_cols, info->encoder_count, info->i2c_devices);
+
+    usb_app_cdc_printf("Config: Device info - Type:%d, Matrix:%dx%d, Encoders:%d, I2C:%d (%s)\r\n",
+                 info->device_type, info->matrix_rows, info->matrix_cols, info->encoder_count, info->i2c_devices, info->device_name);
 }
 
 static void handle_get_keymap(const config_packet_t *request, config_packet_t *response)
@@ -802,20 +820,27 @@ static void handle_get_i2c_devices(config_packet_t *response)
     // Copy detected slave info into the payload
     for (int i = 0; i < detected_slave_count; i++) {
         i2c_device_info_t device_info;
-        // Clear the struct
-        for (int j = 0; j < sizeof(i2c_device_info_t); j++) {
-            ((uint8_t*)&device_info)[j] = 0;
+        memset(&device_info, 0, sizeof(device_info));
+
+        uint8_t address = detected_slaves[i];
+        device_info.address = address;
+        device_info.status = 1; // Online
+
+        device_info_t slave_info;
+        memset(&slave_info, 0, sizeof(slave_info));
+
+        if (request_device_info_from_slave(address, &slave_info)) {
+            device_info.device_type = slave_info.device_type;
+            device_info.firmware_version_major = slave_info.firmware_version_major;
+            device_info.firmware_version_minor = slave_info.firmware_version_minor;
+            device_info.firmware_version_patch = slave_info.firmware_version_patch;
+
+            strncpy(device_info.name, slave_info.device_name, sizeof(device_info.name) - 1u);
+            device_info.name[sizeof(device_info.name) - 1u] = '\0';
+        } else {
+            device_info.device_type = 0;
+            snprintf(device_info.name, sizeof(device_info.name), "Slave %02X", address);
         }
-        
-        device_info.address = detected_slaves[i];
-        device_info.device_type = 0; // Unknown for now, can be updated later
-        device_info.status = 1;      // Online
-        device_info.firmware_version_major = 0;
-        device_info.firmware_version_minor = 0;
-        device_info.firmware_version_patch = 0;
-        sprintf(device_info.name, "Slave %02X", detected_slaves[i]);
-        // Ensure name is null-terminated
-        device_info.name[sizeof(device_info.name) - 1] = '\0';
 
         memcpy(&response->payload[1 + (i * sizeof(i2c_device_info_t))], &device_info, sizeof(i2c_device_info_t));
     }
@@ -859,8 +884,25 @@ static void handle_set_layer_state(const config_packet_t *request, config_packet
 
     uint8_t mask = request->payload[0];
     uint8_t default_layer = request->payload[1];
+    uint8_t current_default = keymap_get_default_layer();
+    bool update_default = false;
+    bool persist_default = false;
 
-    keymap_apply_layer_mask(mask, default_layer, true);
+    if (request->payload_length >= 3) {
+        uint8_t options = request->payload[2];
+        update_default = (options & 0x01u) != 0u;
+        persist_default = (options & 0x02u) != 0u;
+    } else {
+        if (default_layer < KEYMAP_LAYER_COUNT && default_layer != current_default) {
+            update_default = true;
+        }
+    }
+
+    keymap_apply_layer_mask(mask, default_layer, true, update_default);
+
+    if (update_default && persist_default) {
+        keymap_persist_default_layer_state();
+    }
 
     response->payload[0] = keymap_get_layer_mask();
     response->payload[1] = keymap_get_default_layer();
@@ -947,4 +989,23 @@ static void handle_midi_cc(const config_packet_t *request, config_packet_t *resp
     } else {
         response->status = STATUS_ERROR;
     }
+}
+
+static HAL_StatusTypeDef i2c_master_receive_with_retry(uint8_t slave_addr, uint8_t *buffer, uint16_t length, uint32_t timeout)
+{
+    const uint8_t max_attempts = 5;
+    HAL_StatusTypeDef status = HAL_ERROR;
+
+    for (uint8_t attempt = 0; attempt < max_attempts; attempt++) {
+        status = HAL_I2C_Master_Receive(&hi2c2, slave_addr << 1, buffer, length, timeout);
+        if (status == HAL_OK) {
+            return HAL_OK;
+        }
+
+        if (attempt + 1u < max_attempts) {
+            HAL_Delay(1);
+        }
+    }
+
+    return status;
 }

@@ -2,9 +2,11 @@
 #include "keymap.h"
 #include "main.h"
 #include "midi_handler.h"
+#include "op_keycodes.h"
 
 static matrix_event_cb_t user_cb = NULL;
 static uint8_t state[MATRIX_ROWS][MATRIX_COLS] = {0};
+static uint16_t active_keycode_cache[MATRIX_ROWS][MATRIX_COLS] = {0};
 
 void matrix_register_callback(matrix_event_cb_t cb)
 {
@@ -41,6 +43,10 @@ void matrix_init(void)
         GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
         GPIO_InitStruct.Pull = matrix_row_pulls[r];
         HAL_GPIO_Init(matrix_rows[r].port, &GPIO_InitStruct);
+
+        for (uint8_t c = 0; c < MATRIX_COLS; ++c) {
+            active_keycode_cache[r][c] = KC_NO;
+        }
     }
 }
 
@@ -60,7 +66,21 @@ void matrix_scan(void)
             if (pressed != state[r][c])
             {
                 state[r][c] = pressed;
-                uint16_t kc = keymap_get_active_keycode(r, c);
+                uint16_t kc = pressed ? keymap_get_active_keycode(r, c)
+                                      : active_keycode_cache[r][c];
+
+                if (pressed) {
+                    active_keycode_cache[r][c] = kc;
+                } else {
+                    active_keycode_cache[r][c] = KC_NO;
+                    if (kc == KC_NO) {
+                        kc = keymap_get_active_keycode(r, c);
+                    }
+                }
+
+                if (kc == KC_NO) {
+                    continue;
+                }
 
                 // Handle MIDI keycodes
                 midi_handle_keycode(kc, pressed);

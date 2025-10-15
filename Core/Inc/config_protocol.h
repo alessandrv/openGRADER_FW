@@ -16,7 +16,7 @@ extern "C" {
 #define CONFIG_MAX_PAYLOAD_SIZE 56
 #define CONFIG_PACKET_SIZE 64
 #define I2C_SLAVE_CONFIG_CMD_SIZE 7
-#define I2C_SLAVE_CONFIG_MAX_RESPONSE 8
+#define I2C_SLAVE_CONFIG_MAX_RESPONSE 64
 
 // Command types
 typedef enum {
@@ -112,8 +112,7 @@ typedef struct {
     uint8_t firmware_version_major;
     uint8_t firmware_version_minor;
     uint8_t firmware_version_patch;
-    char name[16];
-    uint8_t reserved[6];
+    char name[22];
 } __attribute__((packed)) i2c_device_info_t;
 
 // Public API functions

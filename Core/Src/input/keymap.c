@@ -3,14 +3,29 @@
 #include "pin_config.h"
 #include "eeprom_emulation.h"
 #include "i2c_manager.h"
+#include "usb_app.h"
+
+#include <stddef.h>
 
 // EEPROM initialization flag
 static bool keymap_initialized = false;
 static uint8_t active_layer_mask = 0x01;
 static uint8_t default_layer_index = 0;
+static uint8_t persistent_layer_index = 0;
+
+typedef struct {
+    uint8_t layer;
+    uint8_t refcount;
+} momentary_layer_entry_t;
+
+static momentary_layer_entry_t momentary_layers[KEYMAP_LAYER_COUNT];
+static uint8_t momentary_layer_count = 0;
 
 static void keymap_broadcast_layer_state(void);
-static void keymap_set_layer_mask_internal(uint8_t mask, uint8_t default_index, bool propagate);
+static void keymap_recompute_active_mask(bool propagate, bool force_broadcast);
+static uint8_t keymap_first_active_layer(uint8_t mask);
+static void keymap_clear_momentary_layers(void);
+static momentary_layer_entry_t *keymap_find_momentary_entry(uint8_t layer);
 
 // Matrix pin configuration from pin_config.h
 const pin_t matrix_cols[MATRIX_COLS] = MATRIX_COL_PINS;
@@ -129,41 +144,49 @@ const uint16_t encoder_map[KEYMAP_LAYER_COUNT][ENCODER_COUNT][2] = {
 // Initialize keymap system
 void keymap_init(void)
 {
-    if (!keymap_initialized) {
-        // Initialize EEPROM emulation
-        if (!eeprom_init()) {
-            // EEPROM init failed, but we can still use defaults
-            // This will be logged in eeprom_init()
-        }
-        uint8_t stored_mask = 0;
-        uint8_t stored_default = 0;
-
-        if (!eeprom_get_layer_state(&stored_mask, &stored_default)) {
-            stored_mask = 0;
-            stored_default = 0;
-        }
-
-        if (stored_default >= KEYMAP_LAYER_COUNT) {
-            stored_default = 0;
-        }
-
-        uint8_t allowed_mask = (KEYMAP_LAYER_COUNT >= 8)
-            ? 0xFF
-            : (uint8_t)((1u << KEYMAP_LAYER_COUNT) - 1u);
-        stored_mask &= allowed_mask;
-
-        if (stored_mask == 0) {
-            uint16_t startup_bit = (uint16_t)1u << stored_default;
-            stored_mask = (uint8_t)(startup_bit & 0xFFu);
-            if (stored_mask == 0) {
-                stored_mask = 1u;
-            }
-        }
-
-        active_layer_mask = stored_mask;
-        default_layer_index = stored_default;
-        keymap_initialized = true;
+    if (keymap_initialized) {
+        return;
     }
+
+    if (!eeprom_init()) {
+        // EEPROM init failure already logged; proceed with defaults
+    }
+
+    uint8_t stored_mask = 0;
+    uint8_t stored_default = 0;
+
+    if (!eeprom_get_layer_state(&stored_mask, &stored_default)) {
+        stored_mask = 0;
+        stored_default = 0;
+    }
+
+    if (stored_default >= KEYMAP_LAYER_COUNT) {
+        stored_default = 0;
+    }
+
+    uint8_t allowed_mask = (KEYMAP_LAYER_COUNT >= 8)
+        ? 0xFF
+        : (uint8_t)((1u << KEYMAP_LAYER_COUNT) - 1u);
+    stored_mask &= allowed_mask;
+
+    if (stored_mask == 0) {
+        stored_mask = (uint8_t)(1u << stored_default);
+        if (stored_mask == 0) {
+            stored_mask = 1u;
+        }
+    }
+
+    default_layer_index = stored_default;
+    persistent_layer_index = keymap_first_active_layer(stored_mask);
+    if (persistent_layer_index >= KEYMAP_LAYER_COUNT) {
+        persistent_layer_index = default_layer_index;
+    }
+
+    keymap_clear_momentary_layers();
+    active_layer_mask = 0;
+    keymap_recompute_active_mask(false, false);
+
+    keymap_initialized = true;
 }
 
 uint16_t keymap_get_keycode(uint8_t layer, uint8_t row, uint8_t col)
@@ -177,11 +200,17 @@ uint16_t keymap_get_keycode(uint8_t layer, uint8_t row, uint8_t col)
     }
 
     uint16_t stored = eeprom_get_keycode(layer, row, col);
+    uint16_t compiled = keycodes[layer][row][col];
+    
+    // Detailed debug logging
+    usb_app_cdc_printf("KEYMAP_GET: [L%d,%d,%d] EEPROM=0x%04X Compiled=0x%04X\r\n", 
+                       layer, row, col, stored, compiled);
+    
     if (stored != 0) {
         return stored;
     }
 
-    return keycodes[layer][row][col];
+    return compiled;
 }
 
 uint16_t keymap_get_active_keycode(uint8_t row, uint8_t col)
@@ -194,18 +223,24 @@ uint16_t keymap_get_active_keycode(uint8_t row, uint8_t col)
         keymap_init();
     }
 
-    for (int8_t layer = KEYMAP_LAYER_COUNT - 1; layer >= 0; --layer) {
-        if ((active_layer_mask & (uint8_t)(1u << layer)) == 0) {
+    for (int8_t idx = (int8_t)momentary_layer_count - 1; idx >= 0; --idx) {
+        uint8_t layer = momentary_layers[(uint8_t)idx].layer;
+        if (layer >= KEYMAP_LAYER_COUNT) {
             continue;
         }
 
-        uint16_t code = keymap_get_keycode((uint8_t)layer, row, col);
-        if (code == KC_TRANSPARENT) {
+        uint16_t code = keymap_get_keycode(layer, row, col);
+        if (code == KC_TRANSPARENT || code == KC_NO) {
             continue;
         }
 
-        if (code != 0) {
-            return code;
+        return code;
+    }
+
+    if (persistent_layer_index < KEYMAP_LAYER_COUNT) {
+        uint16_t base_code = keymap_get_keycode(persistent_layer_index, row, col);
+        if (base_code != KC_TRANSPARENT && base_code != KC_NO) {
+            return base_code;
         }
     }
 
@@ -256,23 +291,38 @@ bool keymap_get_active_encoder_map(uint8_t encoder_id, uint16_t *ccw_keycode, ui
         keymap_init();
     }
 
-    for (int8_t layer = KEYMAP_LAYER_COUNT - 1; layer >= 0; --layer) {
-        if ((active_layer_mask & (uint8_t)(1u << layer)) == 0) {
+    for (int8_t idx = (int8_t)momentary_layer_count - 1; idx >= 0; --idx) {
+        uint8_t layer = momentary_layers[(uint8_t)idx].layer;
+        if (layer >= KEYMAP_LAYER_COUNT) {
             continue;
         }
 
         uint16_t temp_ccw = 0;
         uint16_t temp_cw = 0;
-        keymap_get_encoder_map((uint8_t)layer, encoder_id, &temp_ccw, &temp_cw);
+        keymap_get_encoder_map(layer, encoder_id, &temp_ccw, &temp_cw);
 
         if (temp_ccw == KC_TRANSPARENT && temp_cw == KC_TRANSPARENT) {
             continue;
         }
 
-        if (temp_ccw != 0 || temp_cw != 0) {
+        if (temp_ccw != KC_NO || temp_cw != KC_NO) {
             *ccw_keycode = temp_ccw;
             *cw_keycode = temp_cw;
             return true;
+        }
+    }
+
+    if (persistent_layer_index < KEYMAP_LAYER_COUNT) {
+        uint16_t temp_ccw = 0;
+        uint16_t temp_cw = 0;
+        keymap_get_encoder_map(persistent_layer_index, encoder_id, &temp_ccw, &temp_cw);
+
+        if (!(temp_ccw == KC_TRANSPARENT && temp_cw == KC_TRANSPARENT)) {
+            if (temp_ccw != KC_NO || temp_cw != KC_NO) {
+                *ccw_keycode = temp_ccw;
+                *cw_keycode = temp_cw;
+                return true;
+            }
         }
     }
 
@@ -294,46 +344,83 @@ bool keymap_set_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t ccw_keyc
     return eeprom_set_encoder_map(layer, encoder_id, ccw_keycode, cw_keycode);
 }
 
-static void keymap_set_layer_mask_internal(uint8_t mask, uint8_t default_index, bool propagate)
+static uint8_t keymap_first_active_layer(uint8_t mask)
 {
-    if (default_index >= KEYMAP_LAYER_COUNT) {
-        default_index = 0;
+    for (uint8_t idx = 0; idx < KEYMAP_LAYER_COUNT; ++idx) {
+        if ((mask & (uint8_t)(1u << idx)) != 0u) {
+            return idx;
+        }
+    }
+
+    return KEYMAP_LAYER_COUNT;
+}
+
+static void keymap_clear_momentary_layers(void)
+{
+    for (uint8_t i = 0; i < KEYMAP_LAYER_COUNT; ++i) {
+        momentary_layers[i].layer = 0;
+        momentary_layers[i].refcount = 0;
+    }
+    momentary_layer_count = 0;
+}
+
+static momentary_layer_entry_t *keymap_find_momentary_entry(uint8_t layer)
+{
+    for (uint8_t i = 0; i < momentary_layer_count; ++i) {
+        if (momentary_layers[i].layer == layer) {
+            return &momentary_layers[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void keymap_recompute_active_mask(bool propagate, bool force_broadcast)
+{
+    if (persistent_layer_index >= KEYMAP_LAYER_COUNT) {
+        persistent_layer_index = default_layer_index;
+        if (persistent_layer_index >= KEYMAP_LAYER_COUNT) {
+            persistent_layer_index = 0;
+        }
     }
 
     uint8_t allowed_mask = (KEYMAP_LAYER_COUNT >= 8)
         ? 0xFF
         : (uint8_t)((1u << KEYMAP_LAYER_COUNT) - 1u);
+
+    uint8_t mask = (uint8_t)(1u << persistent_layer_index);
+    if (mask == 0) {
+        mask = 1u;
+    }
+
+    for (uint8_t i = 0; i < momentary_layer_count; ++i) {
+        uint8_t layer = momentary_layers[i].layer;
+        if (layer >= KEYMAP_LAYER_COUNT) {
+            continue;
+        }
+        mask |= (uint8_t)(1u << layer);
+    }
+
     mask &= allowed_mask;
 
     if (mask == 0) {
-        uint16_t startup_bit = (uint16_t)1u << default_index;
-        mask = (uint8_t)(startup_bit & 0xFFu);
+        persistent_layer_index = default_layer_index;
+        if (persistent_layer_index >= KEYMAP_LAYER_COUNT) {
+            persistent_layer_index = 0;
+        }
+        mask = (uint8_t)(1u << persistent_layer_index);
         if (mask == 0) {
             mask = 1u;
         }
     }
 
-    uint8_t previous_mask = active_layer_mask;
-    uint8_t previous_default = default_layer_index;
-
-    if (mask == previous_mask && default_index == previous_default) {
-        return;
+    bool changed = (mask != active_layer_mask);
+    if (changed) {
+        active_layer_mask = mask;
     }
 
-    active_layer_mask = mask;
-    default_layer_index = default_index;
-
-    if (propagate && (previous_mask != active_layer_mask || previous_default != default_layer_index)) {
+    if (propagate && (changed || force_broadcast)) {
         keymap_broadcast_layer_state();
-    }
-
-    if (previous_default != default_layer_index) {
-        uint16_t persist_bit = (uint16_t)1u << default_layer_index;
-        uint8_t persist_mask = (uint8_t)(persist_bit & 0xFFu);
-        if (persist_mask == 0) {
-            persist_mask = 1u;
-        }
-        eeprom_set_layer_state(persist_mask, default_layer_index);
     }
 }
 
@@ -344,11 +431,17 @@ static void keymap_broadcast_layer_state(void)
 
 uint8_t keymap_get_layer_mask(void)
 {
+    if (!keymap_initialized) {
+        keymap_init();
+    }
     return active_layer_mask;
 }
 
 uint8_t keymap_get_default_layer(void)
 {
+    if (!keymap_initialized) {
+        keymap_init();
+    }
     return default_layer_index;
 }
 
@@ -358,8 +451,22 @@ void keymap_layer_on(uint8_t layer)
         return;
     }
 
-    uint8_t mask = active_layer_mask | (uint8_t)(1u << layer);
-    keymap_set_layer_mask_internal(mask, default_layer_index, true);
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+
+    momentary_layer_entry_t *entry = keymap_find_momentary_entry(layer);
+    if (entry) {
+        if (entry->refcount < UINT8_MAX) {
+            entry->refcount++;
+        }
+    } else if (momentary_layer_count < KEYMAP_LAYER_COUNT) {
+        momentary_layers[momentary_layer_count].layer = layer;
+        momentary_layers[momentary_layer_count].refcount = 1;
+        momentary_layer_count++;
+    }
+
+    keymap_recompute_active_mask(true, false);
 }
 
 void keymap_layer_off(uint8_t layer)
@@ -368,8 +475,33 @@ void keymap_layer_off(uint8_t layer)
         return;
     }
 
-    uint8_t mask = (uint8_t)(active_layer_mask & ~(uint8_t)(1u << layer));
-    keymap_set_layer_mask_internal(mask, default_layer_index, true);
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+
+    for (uint8_t i = 0; i < momentary_layer_count; ++i) {
+        if (momentary_layers[i].layer != layer) {
+            continue;
+        }
+
+        if (momentary_layers[i].refcount > 0) {
+            momentary_layers[i].refcount--;
+        }
+
+        if (momentary_layers[i].refcount == 0) {
+            for (uint8_t j = i; j + 1u < momentary_layer_count; ++j) {
+                momentary_layers[j] = momentary_layers[j + 1u];
+            }
+            if (momentary_layer_count > 0) {
+                momentary_layer_count--;
+                momentary_layers[momentary_layer_count].layer = 0;
+                momentary_layers[momentary_layer_count].refcount = 0;
+            }
+        }
+
+        keymap_recompute_active_mask(true, false);
+        return;
+    }
 }
 
 void keymap_layer_move(uint8_t layer)
@@ -378,12 +510,144 @@ void keymap_layer_move(uint8_t layer)
         return;
     }
 
-    keymap_set_layer_mask_internal((uint8_t)(1u << layer), layer, true);
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+
+    if (persistent_layer_index == layer) {
+        return;
+    }
+
+    persistent_layer_index = layer;
+    keymap_recompute_active_mask(true, false);
 }
 
-void keymap_apply_layer_mask(uint8_t mask, uint8_t default_layer, bool propagate)
+void keymap_apply_layer_mask(uint8_t mask, uint8_t default_layer, bool propagate, bool update_default)
 {
-    keymap_set_layer_mask_internal(mask, default_layer, propagate);
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+
+    uint8_t allowed_mask = (KEYMAP_LAYER_COUNT >= 8)
+        ? 0xFF
+        : (uint8_t)((1u << KEYMAP_LAYER_COUNT) - 1u);
+
+    uint8_t previous_default = default_layer_index;
+    uint8_t sanitized_default = previous_default;
+    if (update_default) {
+        if (default_layer < KEYMAP_LAYER_COUNT) {
+            sanitized_default = default_layer;
+        } else {
+            sanitized_default = keymap_first_active_layer(mask & allowed_mask);
+            if (sanitized_default >= KEYMAP_LAYER_COUNT) {
+                sanitized_default = previous_default;
+            }
+        }
+
+        if (sanitized_default >= KEYMAP_LAYER_COUNT) {
+            sanitized_default = 0;
+        }
+    }
+
+    uint8_t sanitized_mask = mask & allowed_mask;
+    if (sanitized_mask == 0) {
+        uint8_t fallback = persistent_layer_index;
+        if (update_default) {
+            fallback = sanitized_default;
+        }
+        if (fallback >= KEYMAP_LAYER_COUNT) {
+            fallback = previous_default;
+        }
+        if (fallback >= KEYMAP_LAYER_COUNT) {
+            fallback = 0;
+        }
+
+        sanitized_mask = (uint8_t)(1u << fallback);
+        if (sanitized_mask == 0) {
+            sanitized_mask = 1u;
+        }
+    }
+
+    if (update_default) {
+        uint8_t ensure_bit = (uint8_t)(1u << sanitized_default);
+        if (ensure_bit != 0) {
+            sanitized_mask |= ensure_bit;
+        }
+    }
+
+    bool default_changed = false;
+    if (update_default && sanitized_default != previous_default) {
+        default_layer_index = sanitized_default;
+        default_changed = true;
+        uint8_t persist_mask = (uint8_t)(1u << default_layer_index);
+        if (persist_mask == 0) {
+            persist_mask = 1u;
+        }
+        eeprom_set_layer_state(persist_mask, default_layer_index);
+    }
+
+    uint8_t candidate_persistent = persistent_layer_index;
+    uint8_t current_bit = (candidate_persistent < KEYMAP_LAYER_COUNT)
+        ? (uint8_t)(1u << candidate_persistent)
+        : 0u;
+
+    if (update_default) {
+        candidate_persistent = sanitized_default;
+    } else {
+        if (current_bit == 0u || (sanitized_mask & current_bit) == 0u) {
+            uint8_t default_bit = (uint8_t)(1u << default_layer_index);
+            if (default_bit != 0u && (sanitized_mask & default_bit) != 0u) {
+                candidate_persistent = default_layer_index;
+            } else {
+                candidate_persistent = keymap_first_active_layer(sanitized_mask);
+            }
+        }
+    }
+
+    if (candidate_persistent >= KEYMAP_LAYER_COUNT) {
+        candidate_persistent = keymap_first_active_layer(sanitized_mask);
+    }
+    if (candidate_persistent >= KEYMAP_LAYER_COUNT) {
+        candidate_persistent = default_layer_index;
+    }
+    if (candidate_persistent >= KEYMAP_LAYER_COUNT) {
+        candidate_persistent = 0;
+    }
+
+    persistent_layer_index = candidate_persistent;
+
+    keymap_clear_momentary_layers();
+    for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; ++layer) {
+        uint8_t bit = (uint8_t)(1u << layer);
+        if ((sanitized_mask & bit) == 0) {
+            continue;
+        }
+        if (layer == persistent_layer_index) {
+            continue;
+        }
+        if (momentary_layer_count >= KEYMAP_LAYER_COUNT) {
+            break;
+        }
+        momentary_layers[momentary_layer_count].layer = layer;
+        momentary_layers[momentary_layer_count].refcount = 1;
+        momentary_layer_count++;
+    }
+
+    keymap_recompute_active_mask(propagate, default_changed);
+}
+
+void keymap_persist_default_layer_state(void)
+{
+    if (!keymap_initialized) {
+        keymap_init();
+    }
+
+    uint8_t persist_bit = (uint8_t)(1u << default_layer_index);
+    if (persist_bit == 0) {
+        persist_bit = 1u;
+    }
+
+    eeprom_set_layer_state(persist_bit, default_layer_index);
 }
 
 bool keymap_translate_keycode(uint16_t keycode, bool pressed, uint8_t *hid_code)

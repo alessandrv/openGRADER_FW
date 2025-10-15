@@ -11,6 +11,7 @@
 #include "input/keymap.h"
 #include "config_protocol.h"
 #include "eeprom_emulation.h"
+#include "device_info_util.h"
 /* Private constants */
 #define I2C_SLAVE_ADDRESS 0x42  // 7-bit address for slave mode
 #define I2C_EVENT_FIFO_SIZE 16
@@ -271,8 +272,16 @@ static void process_slave_key_event(const i2c_key_event_t *event)
     }
 
     uint8_t mask = event->layer_mask;
-    uint8_t default_layer = first_active_layer(mask);
-    keymap_apply_layer_mask(mask, default_layer, false);
+    uint8_t default_layer = keymap_get_default_layer();
+    if (mask == 0u) {
+        uint8_t default_bit = (uint8_t)(1u << default_layer);
+        if (default_bit == 0u) {
+            default_bit = 1u;
+        }
+        mask = default_bit;
+    }
+
+    keymap_apply_layer_mask(mask, default_layer, false, false);
 
 
     // Check if this is an encoder event (row 254) or regular matrix key
@@ -356,7 +365,8 @@ static void process_slave_layer_state(const i2c_layer_state_t *event)
         default_layer = first_active_layer(mask);
     }
 
-    keymap_apply_layer_mask(mask, default_layer, false);
+    bool update_default = (default_layer < KEYMAP_LAYER_COUNT) && (default_layer != keymap_get_default_layer());
+    keymap_apply_layer_mask(mask, default_layer, false, update_default);
 }
 
 /* I2C master: burst poll to drain slave FIFO quickly */
@@ -801,7 +811,23 @@ void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c)
         i2c_slave_data_received = 1;
         
         // Process received command
-        if (i2c_slave_rx_buffer[0] == CMD_GET_KEYMAP) {
+        if (i2c_slave_rx_buffer[0] == CMD_GET_INFO) {
+            device_info_t info;
+            memset(&info, 0, sizeof(info));
+            uint8_t device_type = (current_i2c_mode == 1u) ? 1u : 0u;
+            uint8_t i2c_devices = (device_type == 1u) ? detected_slave_count : 0u;
+            device_info_populate(&info, device_type, i2c_devices);
+
+            memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
+            i2c_slave_config_response[0] = CMD_GET_INFO;
+            memcpy(&i2c_slave_config_response[1], &info, sizeof(info));
+            i2c_slave_config_response[1 + sizeof(info)] = STATUS_OK;
+            i2c_slave_config_response_length = (uint8_t)(1u + sizeof(info) + 1u);
+            i2c_slave_has_config_response = 1;
+
+            usb_app_cdc_printf("SLAVE RX: GET_INFO -> %s\r\n", info.device_name);
+        }
+        else if (i2c_slave_rx_buffer[0] == CMD_GET_KEYMAP) {
             uint8_t layer = i2c_slave_rx_buffer[1];
             uint8_t row = i2c_slave_rx_buffer[2];
             uint8_t col = i2c_slave_rx_buffer[3];
@@ -876,7 +902,8 @@ void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c)
         else if (i2c_slave_rx_buffer[0] == CMD_SET_LAYER_STATE) {
             uint8_t mask = i2c_slave_rx_buffer[1];
             uint8_t def_layer = i2c_slave_rx_buffer[2];
-            keymap_apply_layer_mask(mask, def_layer, false);
+            bool update_default = (def_layer < KEYMAP_LAYER_COUNT) && (def_layer != keymap_get_default_layer());
+            keymap_apply_layer_mask(mask, def_layer, false, update_default);
 
             memset(i2c_slave_config_response, 0, sizeof(i2c_slave_config_response));
             i2c_slave_config_response[0] = CMD_SET_LAYER_STATE;

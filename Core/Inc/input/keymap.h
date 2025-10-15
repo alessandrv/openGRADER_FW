@@ -61,7 +61,8 @@ void keymap_layer_off(uint8_t layer);
 void keymap_layer_move(uint8_t layer);
 uint8_t keymap_get_layer_mask(void);
 uint8_t keymap_get_default_layer(void);
-void keymap_apply_layer_mask(uint8_t mask, uint8_t default_layer, bool propagate);
+void keymap_apply_layer_mask(uint8_t mask, uint8_t default_layer, bool propagate, bool update_default);
+void keymap_persist_default_layer_state(void);
 
 
 #endif // KEYMAP_H
