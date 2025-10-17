@@ -34,14 +34,17 @@ void i2c_manager_handle_slave_midi_event(const i2c_midi_event_t *event);
 void i2c_manager_handle_slave_layer_state(const i2c_layer_state_t *event);
 void i2c_manager_broadcast_layer_state(uint8_t layer_mask, uint8_t default_layer);
 
+bool i2c_manager_config_roundtrip(uint8_t slave_address,
+								  const uint8_t *request,
+								  uint8_t request_len,
+								  uint8_t *response,
+								  uint8_t *response_len,
+								  uint32_t timeout_ms);
+
 /* Encoder callback for slave mode */
 void i2c_manager_encoder_callback(uint8_t encoder_idx, uint8_t direction, uint8_t keycode);
 
-/* I2C slave callbacks (to be called from HAL interrupt handlers) */
-void i2c_manager_addr_callback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode);
-void i2c_manager_slave_rx_complete_callback(I2C_HandleTypeDef *hi2c);
-void i2c_manager_slave_tx_complete_callback(I2C_HandleTypeDef *hi2c);
-void i2c_manager_listen_complete_callback(I2C_HandleTypeDef *hi2c);
-void i2c_manager_error_callback(I2C_HandleTypeDef *hi2c);
+void i2c_manager_uart_rx_cplt_callback(UART_HandleTypeDef *huart);
+void i2c_manager_uart_error_callback(UART_HandleTypeDef *huart);
 
 #endif /* I2C_MANAGER_H */

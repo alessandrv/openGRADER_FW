@@ -24,7 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "tusb.h"
 #include "i2c_manager.h"
-#include "i2c.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -219,31 +219,26 @@ void USBWakeUp_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles I2C2 event interrupt.
+  * @brief This function handles USART1 global interrupt.
   */
-void I2C2_EV_IRQHandler(void)
+void USART1_IRQHandler(void)
 {
-  /* USER CODE BEGIN I2C2_EV_IRQn 0 */
-
-  /* USER CODE END I2C2_EV_IRQn 0 */
-  HAL_I2C_EV_IRQHandler(&hi2c2);
-  /* USER CODE BEGIN I2C2_EV_IRQn 1 */
-
-  /* USER CODE END I2C2_EV_IRQn 1 */
+  HAL_UART_IRQHandler(&huart1);
 }
 
-/**
-  * @brief This function handles I2C2 error interrupt.
-  */
-void I2C2_ER_IRQHandler(void)
+void USART2_IRQHandler(void)
 {
-  /* USER CODE BEGIN I2C2_ER_IRQn 0 */
+  HAL_UART_IRQHandler(&huart2);
+}
 
-  /* USER CODE END I2C2_ER_IRQn 0 */
-  HAL_I2C_ER_IRQHandler(&hi2c2);
-  /* USER CODE BEGIN I2C2_ER_IRQn 1 */
+void USART3_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart3);
+}
 
-  /* USER CODE END I2C2_ER_IRQn 1 */
+void UART4_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart4);
 }
 
 /* USER CODE END 1 */

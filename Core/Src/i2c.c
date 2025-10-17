@@ -98,7 +98,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     PA8     ------> I2C2_SDA
     PA9     ------> I2C2_SCL
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_10;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;  // Max speed for 1 MHz I2C
