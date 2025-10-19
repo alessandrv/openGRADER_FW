@@ -8,17 +8,6 @@
 extern "C" {
 #endif
 
-// I2C Configuration
-#define I2C_SLAVE_ADDRESS_BASE 0x42
-#define I2C_BOOTSTRAP_ADDRESS 0x7F
-#define I2C_MAX_SLAVE_COUNT 4
-
-// Slave address configuration - uncomment one of these to set fixed address
-#define FIXED_SLAVE_ADDRESS 0x43   // First slave
-//#define FIXED_SLAVE_ADDRESS 0x43   // Second slave  
-//#define FIXED_SLAVE_ADDRESS 0x44   // Third slave
-//#define FIXED_SLAVE_ADDRESS 0x45   // Fourth slave
-
 // Configuration Protocol Version
 #define CONFIG_PROTOCOL_VERSION 1
 
@@ -58,9 +47,7 @@ typedef enum {
     CMD_SET_SLAVE_ENCODER = 0x15,  // Set encoder mapping on slave (payload: address(1), encoder_id(1), keycodes(4))
     CMD_GET_LAYOUT_INFO = 0x16,    // Retrieve static board layout metadata
     CMD_SET_LAYER_STATE = 0x17,    // Update active layer mask/default
-    CMD_GET_LAYER_STATE = 0x18,    // Query active layer mask/default
-    CMD_ASSIGN_I2C_ADDRESS = 0x19, // Assign new I2C address to slave (payload: new_address(1))
-    CMD_GOTO_BOOTSTRAP = 0x1A      // Tell slave to switch to bootstrap address (payload: none)
+    CMD_GET_LAYER_STATE = 0x18     // Query active layer mask/default
 } config_command_t;
 
 // Response status codes
@@ -116,6 +103,17 @@ typedef struct {
     uint16_t cw_keycode;
     uint8_t reserved;
 } __attribute__((packed)) encoder_entry_t;
+
+// I2C device info
+typedef struct {
+    uint8_t address;
+    uint8_t device_type;      // 0=Unknown, 1=OpenGrader Module
+    uint8_t status;           // 0=Offline, 1=Online
+    uint8_t firmware_version_major;
+    uint8_t firmware_version_minor;
+    uint8_t firmware_version_patch;
+    char name[22];
+} __attribute__((packed)) i2c_device_info_t;
 
 // Public API functions
 void config_protocol_init(void);

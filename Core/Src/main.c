@@ -43,7 +43,7 @@
 #include "key_state.h"
 #include "op_keycodes.h"
 #include "pin_config.h"
-#include "usart.h"
+#include "i2c.h"
 #include "i2c_manager.h"
 #include "tusb.h"
 #include "ws2812.h"
@@ -79,7 +79,6 @@ static uint32_t last_usb_check = 0;
 
 #ifndef FORCE_SLAVE_MODE
 #define FORCE_SLAVE_MODE 0
-
 #endif
 
 // WS2812 LED strip
@@ -158,10 +157,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
-  MX_USART2_UART_Init();
-  MX_USART3_UART_Init();
-  MX_UART4_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   usb_app_init();
   key_state_init();
@@ -362,14 +358,30 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+// I2C slave callbacks - redirect to I2C manager
+void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, uint16_t AddrMatchCode)
 {
-  i2c_manager_uart_rx_cplt_callback(huart);
+  i2c_manager_addr_callback(hi2c, TransferDirection, AddrMatchCode);
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
-  i2c_manager_uart_error_callback(huart);
+  i2c_manager_slave_rx_complete_callback(hi2c);
+}
+
+void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_slave_tx_complete_callback(hi2c);
+}
+
+void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_listen_complete_callback(hi2c);
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
+{
+  i2c_manager_error_callback(hi2c);
 }
 
 /* USER CODE END 4 */

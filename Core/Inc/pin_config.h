@@ -40,10 +40,10 @@
 /* Encoder pin definitions */
 // Encoders: structured with PINA and PINB in a single data structure
 #define ENCODER_PIN_CONFIG { \
-    {{GPIOD, GPIO_PIN_7}, {GPIOD, GPIO_PIN_7}},   /* 1: D5, D6 */ \
+    {{GPIOD, GPIO_PIN_5}, {GPIOD, GPIO_PIN_6}},   /* 1: D5, D6 */ \
     {{GPIOD, GPIO_PIN_7}, {GPIOB, GPIO_PIN_3}},   /* 2: D7, B3 */ \
     {{GPIOB, GPIO_PIN_4}, {GPIOB, GPIO_PIN_5}},   /* 3: B4, B5 */ \
-    {{GPIOB, GPIO_PIN_6}, {GPIOB, GPIO_PIN_6}},   /* 4: B6, B7 */ \
+    {{GPIOB, GPIO_PIN_6}, {GPIOB, GPIO_PIN_7}},   /* 4: B6, B7 */ \
     {{GPIOE, GPIO_PIN_0}, {GPIOE, GPIO_PIN_1}},   /* 5: E0, E1 */ \
     {{GPIOD, GPIO_PIN_13}, {GPIOD, GPIO_PIN_12}}, /* 6: D13, D12 */ \
     {{GPIOB, GPIO_PIN_12}, {GPIOB, GPIO_PIN_13}}, /* 7: B12, B13 */ \
