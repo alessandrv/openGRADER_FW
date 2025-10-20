@@ -24,4 +24,12 @@ typedef struct {
 
 extern const board_layout_info_t board_layout_info;
 
+// Function to get dynamically generated board layout info
+const board_layout_info_t* get_board_layout_info(void);
+
+// Function to get layout cell info for configurator
+#include "input/board_layout_types.h"
+layout_cell_type_t get_layout_cell_type(uint8_t row, uint8_t col);
+uint8_t get_layout_cell_component_id(uint8_t row, uint8_t col);
+
 #endif /* BOARD_LAYOUT_H */

@@ -18,6 +18,13 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
+# Keyboard selection (can be overridden via -DKEYBOARD=onekey)
+if(NOT DEFINED KEYBOARD)
+    set(KEYBOARD "standard")
+endif()
+
+message(STATUS "Building for keyboard: ${KEYBOARD}")
+
 # Set the project name
 set(CMAKE_PROJECT_NAME TINYUSBTEST)
 
@@ -60,11 +67,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/key_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/board_layout.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/keymap.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/input/slider.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/midi_handler.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c_manager.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/config_protocol.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/eeprom_emulation.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ws2812.c
+    # Add keyboard-specific keymap
+    ${CMAKE_CURRENT_SOURCE_DIR}/keyboards/${KEYBOARD}/keymap.c
 )
 
 # Add include paths
@@ -77,11 +87,14 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/class
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/typec
     ${CMAKE_CURRENT_SOURCE_DIR}/tinyusb/src/portable/st/stm32_fsdev
+    # Add keyboards directory for config includes
+    ${CMAKE_CURRENT_SOURCE_DIR}/keyboards
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
+    # Add keyboard config header - use angle brackets include format
+    KEYBOARD_CONFIG_HEADER=<${KEYBOARD}/config.h>
 )
 
 # Remove wrong libob.a library dependency when using cpp files

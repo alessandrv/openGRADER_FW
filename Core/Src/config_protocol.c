@@ -2,6 +2,7 @@
 #include "usb_app.h"
 #include "input/keymap.h"
 #include "input/board_layout.h"
+#include "input/slider.h"
 #include "i2c_manager.h"
 #include "i2c.h"  // Added to include hi2c2 declaration
 #include "pin_config.h"
@@ -9,6 +10,7 @@
 #include "device_info_util.h"
 #include "tusb.h"
 #include "class/hid/hid_device.h"
+#include <string.h>  // For memset, memcpy, strncpy, snprintf
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -30,12 +32,19 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
 static void handle_get_i2c_devices(config_packet_t *response);
 static void handle_get_device_status(config_packet_t *response);
 static void handle_get_layout_info(config_packet_t *response);
+static void handle_get_layout_cell_type(const config_packet_t *request, config_packet_t *response);
+static void handle_get_layout_cell_component_id(const config_packet_t *request, config_packet_t *response);
 static void handle_set_layer_state(const config_packet_t *request, config_packet_t *response);
 static void handle_get_layer_state(config_packet_t *response);
 static void handle_midi_send_raw(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_on(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_note_off(const config_packet_t *request, config_packet_t *response);
 static void handle_midi_cc(const config_packet_t *request, config_packet_t *response);
+
+// Slider protocol handlers
+static void handle_get_slider_value(const config_packet_t *request, config_packet_t *response);
+static void handle_get_slider_config(const config_packet_t *request, config_packet_t *response);
+static void handle_set_slider_config(const config_packet_t *request, config_packet_t *response);
 static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t *keycode);
 static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t keycode);
 static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
@@ -560,6 +569,26 @@ bool config_protocol_process_packet(const config_packet_t *packet)
             handle_get_layer_state(&tx_packet);
             break;
 
+        case CMD_GET_LAYOUT_CELL_TYPE:
+            handle_get_layout_cell_type(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_GET_LAYOUT_CELL_COMPONENT_ID:
+            handle_get_layout_cell_component_id(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_GET_SLIDER_VALUE:
+            handle_get_slider_value(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_GET_SLIDER_CONFIG:
+            handle_get_slider_config(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_SET_SLIDER_CONFIG:
+            handle_set_slider_config(&rx_packet, &tx_packet);
+            break;
+
         case CMD_MIDI_SEND_RAW:
             handle_midi_send_raw(packet, &tx_packet);
             break;
@@ -740,7 +769,15 @@ static void handle_set_keymap(const config_packet_t *request, config_packet_t *r
     
     // Set keycode in EEPROM
     if (keymap_set_keycode(entry->layer, entry->row, entry->col, entry->keycode)) {
-        response->status = STATUS_OK;
+        // Save configuration to EEPROM immediately for consistency
+        if (eeprom_save_config()) {
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Set keycode R%dC%d L%d = 0x%04X (saved to EEPROM)\r\n", 
+                         entry->row, entry->col, entry->layer, entry->keycode);
+        } else {
+            response->status = STATUS_ERROR;
+            usb_app_cdc_printf("Config: Failed to save keycode to EEPROM\r\n");
+        }
     } else {
         response->status = STATUS_ERROR;
     }
@@ -797,7 +834,15 @@ static void handle_set_encoder_map(const config_packet_t *request, config_packet
     
     // Set encoder mapping in EEPROM
     if (keymap_set_encoder_map(entry->layer, entry->encoder_id, entry->ccw_keycode, entry->cw_keycode)) {
-        response->status = STATUS_OK;
+        // Save configuration to EEPROM immediately for consistency
+        if (eeprom_save_config()) {
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Set encoder E%d L%d = CCW:0x%04X CW:0x%04X (saved to EEPROM)\r\n", 
+                         entry->encoder_id, entry->layer, entry->ccw_keycode, entry->cw_keycode);
+        } else {
+            response->status = STATUS_ERROR;
+            usb_app_cdc_printf("Config: Failed to save encoder to EEPROM\r\n");
+        }
     } else {
         response->status = STATUS_ERROR;
     }
@@ -873,6 +918,44 @@ static void handle_get_layout_info(config_packet_t *response)
 
     response->payload_length = layout_size;
     usb_app_cdc_printf("Config: Provided layout info (v%u)\r\n", board_layout_info.version);
+}
+
+static void handle_get_layout_cell_type(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t row = request->payload[0];
+    uint8_t col = request->payload[1];
+
+    layout_cell_type_t cell_type = get_layout_cell_type(row, col);
+    
+    response->payload[0] = (uint8_t)cell_type;
+    response->payload_length = 1;
+    response->status = STATUS_OK;
+    
+    usb_app_cdc_printf("Config: Layout cell type at (%u,%u) = %u\r\n", row, col, (uint8_t)cell_type);
+}
+
+static void handle_get_layout_cell_component_id(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t row = request->payload[0];
+    uint8_t col = request->payload[1];
+
+    uint8_t component_id = get_layout_cell_component_id(row, col);
+    
+    response->payload[0] = component_id;
+    response->payload_length = 1;
+    response->status = STATUS_OK;
+    
+    usb_app_cdc_printf("Config: Layout component ID at (%u,%u) = %u\r\n", row, col, component_id);
 }
 
 static void handle_set_layer_state(const config_packet_t *request, config_packet_t *response)
@@ -1008,4 +1091,106 @@ static HAL_StatusTypeDef i2c_master_receive_with_retry(uint8_t slave_addr, uint8
     }
 
     return status;
+}
+
+// Slider protocol handlers
+static void handle_get_slider_value(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t slider_id = request->payload[0];
+
+#if SLIDER_COUNT > 0
+    if (slider_id >= SLIDER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    // Use raw value for polling - gives immediate ADC reading with current layer config
+    response->payload[0] = slider_get_current_raw_value(slider_id);
+    response->payload_length = 1;
+    response->status = STATUS_OK;
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_get_slider_config(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t layer = request->payload[0];
+    uint8_t slider_id = request->payload[1];
+
+#if SLIDER_COUNT > 0
+    if (layer >= KEYMAP_LAYER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+    
+    if (slider_id >= SLIDER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    // Get slider configuration for the specified layer
+    slider_config_t *response_config = (slider_config_t*)response->payload;
+    
+    if (keymap_get_slider_config(layer, slider_id, response_config)) {
+        response_config->layer = layer;
+        response_config->slider_id = slider_id;
+        response->payload_length = sizeof(slider_config_t);
+        response->status = STATUS_OK;
+    } else {
+        response->status = STATUS_ERROR;
+    }
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_set_slider_config(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < sizeof(slider_config_t)) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+#if SLIDER_COUNT > 0
+    slider_config_t *config = (slider_config_t*)request->payload;
+    
+    if (config->layer >= KEYMAP_LAYER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+    
+    if (config->slider_id >= SLIDER_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    // Set slider configuration for the specified layer
+    if (keymap_set_slider_config(config->layer, config->slider_id, config)) {
+        // Save configuration to EEPROM immediately for simplicity
+        if (eeprom_save_config()) {
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Set slider %d layer %d config - CC%d Ch%d Range%d-%d (saved to EEPROM)\r\n", 
+                         config->slider_id, config->layer, config->midi_cc, config->midi_channel,
+                         config->min_midi_value, config->max_midi_value);
+        } else {
+            response->status = STATUS_ERROR;
+            usb_app_cdc_printf("Config: Failed to save slider config to EEPROM\r\n");
+        }
+    } else {
+        response->status = STATUS_ERROR;
+    }
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
 }

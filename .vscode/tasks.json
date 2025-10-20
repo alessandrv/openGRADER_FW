@@ -11,6 +11,23 @@
     "tasks": [
         {
             "type": "shell",
+            "label": "CubeProg: Flash project (USB)",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=usb1",
+                "-d",
+                "${workspaceFolder}\\build\\Debug\\TINYUSBTEST.elf",
+                "-v",
+                "--start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
             "label": "CubeProg: Flash project (SWD)",
             "command": "STM32_Programmer_CLI",
             "args": [
@@ -29,7 +46,15 @@
             "problemMatcher": []
         },
         {
-            "label": "Build + Flash",
+            "label": "Build + Flash (USB)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "CMake: clean rebuild",
+                "CubeProg: Flash project (USB)",
+            ]
+        },
+        {
+            "label": "Build + Flash (SWD)",
             "dependsOrder": "sequence",
             "dependsOn": [
                 "CMake: clean rebuild",
@@ -57,6 +82,354 @@
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Configure: Standard Keyboard",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug",
+                "-DKEYBOARD=standard"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Configure: OneKey Keyboard",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug",
+                "-DKEYBOARD=onekey"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Configure: Slider Keyboard",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug",
+                "-DKEYBOARD=slider"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Configure: Potentiometer Keyboard",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug",
+                "-DKEYBOARD=potentiometer"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "Build: Standard Keyboard",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "dependsOn": ["Configure: Standard Keyboard"],
+            "dependsOrder": "sequence",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "Build: OneKey Keyboard",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "dependsOn": ["Configure: OneKey Keyboard"],
+            "dependsOrder": "sequence",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "Build: Slider Keyboard",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "dependsOn": ["Configure: Slider Keyboard"],
+            "dependsOrder": "sequence",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "Build: Potentiometer Keyboard",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "dependsOn": ["Configure: Potentiometer Keyboard"],
+            "dependsOrder": "sequence",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Clean Build: Standard Keyboard",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Configure: Standard Keyboard",
+                "CMake: clean rebuild"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Clean Build: OneKey Keyboard",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Configure: OneKey Keyboard",
+                "CMake: clean rebuild"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Clean Build: Slider Keyboard",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Configure: Slider Keyboard",
+                "CMake: clean rebuild"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Clean Build: Potentiometer Keyboard",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Configure: Potentiometer Keyboard",
+                "CMake: clean rebuild"
+            ],
+            "group": "build"
+        },
+        {
+            "type": "shell",
+            "label": "Flash: Standard Keyboard (USB)",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=usb1",
+                "-d",
+                "${workspaceFolder}\\build\\Debug\\TINYUSBTEST.elf",
+                "-v",
+                "--start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            }
+        },
+        {
+            "type": "shell",
+            "label": "Flash: OneKey Keyboard (USB)",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=usb1",
+                "-d",
+                "${workspaceFolder}\\build\\Debug\\TINYUSBTEST.elf",
+                "-v",
+                "--start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            }
+        },
+        {
+            "type": "shell",
+            "label": "Flash: Slider Keyboard (USB)",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=usb1",
+                "-d",
+                "${workspaceFolder}\\build\\Debug\\TINYUSBTEST.elf",
+                "-v",
+                "--start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            }
+        },
+        {
+            "type": "shell",
+            "label": "Flash: Potentiometer Keyboard (USB)",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=usb1",
+                "-d",
+                "${workspaceFolder}\\build\\Debug\\TINYUSBTEST.elf",
+                "-v",
+                "--start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            }
+        },
+        {
+            "label": "Build + Flash: Standard Keyboard (USB)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Standard Keyboard",
+                "Flash: Standard Keyboard (USB)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: OneKey Keyboard (USB)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: OneKey Keyboard",
+                "Flash: OneKey Keyboard (USB)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: Slider Keyboard (USB)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Slider Keyboard",
+                "Flash: Slider Keyboard (USB)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: Potentiometer Keyboard (USB)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Potentiometer Keyboard",
+                "Flash: Potentiometer Keyboard (USB)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: Standard Keyboard (SWD)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Standard Keyboard",
+                "CubeProg: Flash project (SWD)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: OneKey Keyboard (SWD)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: OneKey Keyboard",
+                "CubeProg: Flash project (SWD)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: Slider Keyboard (SWD)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Slider Keyboard",
+                "CubeProg: Flash project (SWD)"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Build + Flash: Potentiometer Keyboard (SWD)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build: Potentiometer Keyboard",
+                "CubeProg: Flash project (SWD)"
+            ],
+            "group": "build"
         }
     ]
 }

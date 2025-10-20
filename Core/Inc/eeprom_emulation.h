@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "input/keymap.h"
+#include "config_protocol.h"  // For slider_config_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,9 +26,10 @@ typedef struct {
     uint32_t checksum;                                  // CRC32 checksum
     uint16_t keymap[KEYMAP_LAYER_COUNT][MATRIX_ROWS][MATRIX_COLS];
     uint16_t encoder_map[KEYMAP_LAYER_COUNT][ENCODER_COUNT][2];
+    slider_config_t slider_map[KEYMAP_LAYER_COUNT][SLIDER_COUNT];  // Slider configurations per layer
     uint8_t startup_layer_mask;                         // Layer mask restored on boot
     uint8_t default_layer;                              // Default layer index
-    uint8_t reserved[30];                               // Reserved for future use
+    uint8_t reserved[26];                               // Reserved for future use (reduced for slider_map)
 } __attribute__((packed)) eeprom_data_t;
 
 // Public API
@@ -47,6 +49,10 @@ bool eeprom_set_keycode(uint8_t layer, uint8_t row, uint8_t col, uint16_t keycod
 uint16_t eeprom_get_keycode(uint8_t layer, uint8_t row, uint8_t col);
 bool eeprom_set_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t ccw_keycode, uint16_t cw_keycode);
 bool eeprom_get_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
+
+// Slider configuration access
+bool eeprom_set_slider_config(uint8_t layer, uint8_t slider_id, const slider_config_t *config);
+bool eeprom_get_slider_config(uint8_t layer, uint8_t slider_id, slider_config_t *config);
 
 #ifdef __cplusplus
 }

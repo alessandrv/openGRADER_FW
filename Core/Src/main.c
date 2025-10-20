@@ -40,6 +40,7 @@
 #include "input/matrix.h"
 #include "input/encoder.h"
 #include "input/keymap.h"
+#include "input/slider.h"
 #include "key_state.h"
 #include "op_keycodes.h"
 #include "pin_config.h"
@@ -163,6 +164,7 @@ int main(void)
   key_state_init();
   encoder_init();
   matrix_init();
+  slider_init();
   i2c_manager_init();
   
   // Initialize WS2812 LED strip
@@ -204,6 +206,7 @@ int main(void)
     usb_app_task();
     matrix_scan();
     encoder_task();
+    slider_scan();
     key_state_task();
     
     // Check USB connection status periodically for master/slave switching

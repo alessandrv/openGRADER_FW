@@ -359,6 +359,58 @@ bool eeprom_get_encoder_map(uint8_t layer, uint8_t encoder_id, uint16_t *ccw_key
     return true;
 }
 
+bool eeprom_set_slider_config(uint8_t layer, uint8_t slider_id, const slider_config_t *config)
+{
+    if (layer >= KEYMAP_LAYER_COUNT || slider_id >= SLIDER_COUNT || !config) {
+        return false;
+    }
+
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    // Check if the configuration actually changed
+    bool changed = false;
+    slider_config_t *current_config = &eeprom_data.slider_map[layer][slider_id];
+    
+    if (current_config->midi_cc != config->midi_cc ||
+        current_config->midi_channel != config->midi_channel ||
+        current_config->min_midi_value != config->min_midi_value ||
+        current_config->max_midi_value != config->max_midi_value) {
+        changed = true;
+    }
+
+    if (changed) {
+        *current_config = *config;  // Copy the entire config
+        current_config->layer = layer;  // Ensure layer is correct
+        current_config->slider_id = slider_id;  // Ensure slider_id is correct
+        config_modified = true;
+        usb_app_cdc_printf("EEPROM: Slider[L%d][%d] = CC%d Ch%d Range%d-%d\r\n",
+                           layer, slider_id, config->midi_cc, config->midi_channel,
+                           config->min_midi_value, config->max_midi_value);
+    }
+
+    return true;
+}
+
+bool eeprom_get_slider_config(uint8_t layer, uint8_t slider_id, slider_config_t *config)
+{
+    if (layer >= KEYMAP_LAYER_COUNT || slider_id >= SLIDER_COUNT || !config) {
+        return false;
+    }
+
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    *config = eeprom_data.slider_map[layer][slider_id];
+    return true;
+}
+
 bool eeprom_set_layer_state(uint8_t active_mask, uint8_t default_layer)
 {
     if (!eeprom_initialized) {
@@ -555,6 +607,16 @@ static void load_default_config(void)
         for (uint8_t idx = 0; idx < ENCODER_COUNT; idx++) {
             eeprom_data.encoder_map[layer][idx][0] = encoder_map[layer][idx][0];
             eeprom_data.encoder_map[layer][idx][1] = encoder_map[layer][idx][1];
+        }
+    }
+
+    // Copy default slider configuration map for all layers
+    for (uint8_t layer = 0; layer < KEYMAP_LAYER_COUNT; layer++) {
+        for (uint8_t idx = 0; idx < SLIDER_COUNT; idx++) {
+            eeprom_data.slider_map[layer][idx] = slider_config_map[layer][idx];
+            // Ensure layer and slider_id are correct
+            eeprom_data.slider_map[layer][idx].layer = layer;
+            eeprom_data.slider_map[layer][idx].slider_id = idx;
         }
     }
 

@@ -45,9 +45,14 @@ typedef enum {
     CMD_GET_SLAVE_INFO = 0x13,     // Get detailed info from slave device (payload: address(1))
     CMD_GET_SLAVE_ENCODER = 0x14,  // Get encoder mapping from slave (payload: address(1), encoder_id(1))
     CMD_SET_SLAVE_ENCODER = 0x15,  // Set encoder mapping on slave (payload: address(1), encoder_id(1), keycodes(4))
-    CMD_GET_LAYOUT_INFO = 0x16,    // Retrieve static board layout metadata
-    CMD_SET_LAYER_STATE = 0x17,    // Update active layer mask/default
-    CMD_GET_LAYER_STATE = 0x18     // Query active layer mask/default
+    CMD_GET_LAYOUT_INFO = 0x16,        // Retrieve static board layout metadata
+    CMD_SET_LAYER_STATE = 0x17,        // Update active layer mask/default
+    CMD_GET_LAYER_STATE = 0x18,        // Query active layer mask/default
+    CMD_GET_LAYOUT_CELL_TYPE = 0x19,   // Get layout cell type at matrix position (payload: row(1), col(1))
+    CMD_GET_LAYOUT_CELL_COMPONENT_ID = 0x1A, // Get component ID at matrix position (payload: row(1), col(1))
+    CMD_GET_SLIDER_VALUE = 0x1B,       // Get current slider value (payload: slider_id(1)) -> value(1)
+    CMD_GET_SLIDER_CONFIG = 0x1C,      // Get slider configuration (payload: layer(1), slider_id(1)) -> config
+    CMD_SET_SLIDER_CONFIG = 0x1D       // Set slider configuration (payload: layer(1), slider_id(1), config)
 } config_command_t;
 
 // Response status codes
@@ -114,6 +119,17 @@ typedef struct {
     uint8_t firmware_version_patch;
     char name[22];
 } __attribute__((packed)) i2c_device_info_t;
+
+// Slider configuration entry
+typedef struct {
+    uint8_t layer;
+    uint8_t slider_id;
+    uint8_t midi_cc;
+    uint8_t midi_channel;
+    uint8_t min_midi_value;
+    uint8_t max_midi_value;
+    uint8_t reserved[2];
+} __attribute__((packed)) slider_config_t;
 
 // Public API functions
 void config_protocol_init(void);
