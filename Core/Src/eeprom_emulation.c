@@ -411,6 +411,59 @@ bool eeprom_get_slider_config(uint8_t layer, uint8_t slider_id, slider_config_t 
     return true;
 }
 
+bool eeprom_set_magnetic_switch_calibration(uint8_t switch_id, uint16_t unpressed_value, uint16_t pressed_value, uint8_t sensitivity)
+{
+    if (switch_id >= MAX_MAGNETIC_SWITCHES_EEPROM) {
+        return false;
+    }
+
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    // Check if the calibration actually changed (avoid taking address of packed member)
+    bool changed = (eeprom_data.magnetic_switches[switch_id].unpressed_value != unpressed_value ||
+                   eeprom_data.magnetic_switches[switch_id].pressed_value != pressed_value ||
+                   eeprom_data.magnetic_switches[switch_id].sensitivity != sensitivity ||
+                   !eeprom_data.magnetic_switches[switch_id].is_calibrated);
+
+    if (changed) {
+        eeprom_data.magnetic_switches[switch_id].unpressed_value = unpressed_value;
+        eeprom_data.magnetic_switches[switch_id].pressed_value = pressed_value;
+        eeprom_data.magnetic_switches[switch_id].sensitivity = sensitivity;
+        eeprom_data.magnetic_switches[switch_id].is_calibrated = true;
+        config_modified = true;
+        usb_app_cdc_printf("EEPROM: MagSwitch[%d] = unpressed:%d pressed:%d sensitivity:%d%%\r\n",
+                           switch_id, unpressed_value, pressed_value, sensitivity);
+    }
+
+    return true;
+}
+
+bool eeprom_get_magnetic_switch_calibration(uint8_t switch_id, uint16_t *unpressed_value, uint16_t *pressed_value, uint8_t *sensitivity, bool *is_calibrated)
+{
+    if (switch_id >= MAX_MAGNETIC_SWITCHES_EEPROM || 
+        !unpressed_value || !pressed_value || !sensitivity || !is_calibrated) {
+        return false;
+    }
+
+    if (!eeprom_initialized) {
+        if (!eeprom_init()) {
+            return false;
+        }
+    }
+
+    // Avoid taking address of packed member
+    *unpressed_value = eeprom_data.magnetic_switches[switch_id].unpressed_value;
+    *pressed_value = eeprom_data.magnetic_switches[switch_id].pressed_value;
+    *sensitivity = eeprom_data.magnetic_switches[switch_id].sensitivity;
+    *is_calibrated = eeprom_data.magnetic_switches[switch_id].is_calibrated;
+    
+    return true;
+}
+
 bool eeprom_set_layer_state(uint8_t active_mask, uint8_t default_layer)
 {
     if (!eeprom_initialized) {

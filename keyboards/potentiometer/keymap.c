@@ -2,7 +2,7 @@
 #include "op_keycodes.h"
 #include "config_protocol.h"  // For slider_config_t
 
-// Mixed controls keyboard keymap - 5x2 matrix with column 1: potentiometer/switches/encoder, column 2: slider
+// Mixed controls keyboard keymap - 6x2 matrix with column 1: potentiometer/switches/encoder/magnetic switch, column 2: slider
 const uint16_t keycodes[KEYMAP_LAYER_COUNT][MATRIX_ROWS][MATRIX_COLS] = {
     // Layer 0: Mixed controls
     {
@@ -10,7 +10,8 @@ const uint16_t keycodes[KEYMAP_LAYER_COUNT][MATRIX_ROWS][MATRIX_COLS] = {
         {KC_A, KC_NO},       // Row 1: Switch 0 (A), Empty
         {KC_B, KC_NO},       // Row 2: Switch 1 (B), Empty
         {KC_C, KC_NO},       // Row 3: Switch 2 (C), Empty
-        {KC_O, KC_NO}       // Row 4: Encoder 0, Empty
+        {KC_O, KC_NO},       // Row 4: Encoder 0, Empty
+        {KC_M, KC_NO}        // Row 5: Magnetic Switch 0 (M), Empty
     }
 };
 

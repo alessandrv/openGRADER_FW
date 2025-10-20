@@ -7,8 +7,8 @@
 /* Keyboard name */
 #define KEYBOARD_NAME "OpenGrader Mixed Controls"
 
-/* Matrix configuration - 1 potentiometer + 1 slider + 3 switches + 1 encoder */
-#define MATRIX_ROWS 5
+/* Matrix configuration - 1 potentiometer + 1 slider + 3 switches + 1 encoder + 1 magnetic switch */
+#define MATRIX_ROWS 6
 #define MATRIX_COLS 2
 
 /* Pin definitions */
@@ -25,8 +25,8 @@ typedef struct {
 
 /* Matrix pin definitions - for switches */
 #define MATRIX_COL_PINS { {GPIOB, GPIO_PIN_0}, {GPIOB, GPIO_PIN_1} }
-#define MATRIX_ROW_PINS { {GPIOB, GPIO_PIN_2}, {GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_4}, {GPIOB, GPIO_PIN_5}, {GPIOB, GPIO_PIN_8} }
-#define MATRIX_ROW_PULL_CONFIG { GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN }
+#define MATRIX_ROW_PINS { {GPIOB, GPIO_PIN_2}, {GPIOB, GPIO_PIN_3}, {GPIOB, GPIO_PIN_4}, {GPIOB, GPIO_PIN_5}, {GPIOB, GPIO_PIN_8}, {GPIOB, GPIO_PIN_9} }
+#define MATRIX_ROW_PULL_CONFIG { GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN, GPIO_PULLDOWN }
 
 /* Encoder configuration - 1 encoder */
 #define ENCODER_COUNT 1
@@ -81,15 +81,37 @@ static const slider_hw_config_t slider_configs[SLIDER_COUNT] = {
         .min_midi_value = 0,
         .max_midi_value = 127
     }
+    
 };
 
-// Physical matrix layout - column 1: potentiometer, switches, encoder; column 2: slider
+/* Magnetic switch configuration */
+#define MAGNETIC_SWITCH_COUNT 1
+
+// Magnetic switch hardware configuration structure  
+typedef struct {
+    uint32_t channel;           // ADC channel number
+    GPIO_TypeDef *gpio_port;    // GPIO port for the pin
+    uint32_t gpio_pin;          // GPIO pin number
+    uint16_t keycode;           // Default keycode to send when pressed
+} magnetic_switch_hw_config_t;
+
+// Magnetic Switch: ADC1_IN1 on PA0 (using different pin than slider/pot)
+static const magnetic_switch_hw_config_t magnetic_switch_configs[MAGNETIC_SWITCH_COUNT] = {
+    {
+        .channel = ADC_CHANNEL_1,
+        .gpio_port = GPIOA,
+        .gpio_pin = GPIO_PIN_0,
+        .keycode = 0x04  // KC_A as default
+    }
+};
+// Physical matrix layout - column 1: potentiometer, switches, encoder, magnetic switch; column 2: slider
 #define KEYBOARD_LAYOUT { \
     { LAYOUT_CELL(LAYOUT_POTENTIOMETER, 0), LAYOUT_CELL(LAYOUT_SLIDER, 1) }, \
     { LAYOUT_CELL(LAYOUT_SWITCH, 2), LAYOUT_CELL(LAYOUT_EMPTY, 0) }, \
     { LAYOUT_CELL(LAYOUT_SWITCH, 3), LAYOUT_CELL(LAYOUT_EMPTY, 0) }, \
     { LAYOUT_CELL(LAYOUT_SWITCH, 4), LAYOUT_CELL(LAYOUT_EMPTY, 0) }, \
-    { LAYOUT_CELL(LAYOUT_ENCODER, 5), LAYOUT_CELL(LAYOUT_EMPTY, 0) } \
+    { LAYOUT_CELL(LAYOUT_ENCODER, 5), LAYOUT_CELL(LAYOUT_EMPTY, 0) }, \
+    { LAYOUT_CELL(LAYOUT_MAGNETIC_SWITCH, 0), LAYOUT_CELL(LAYOUT_EMPTY, 0) } \
 }
 
 // Pin definitions for ADC (same pins, different controls)
@@ -99,7 +121,7 @@ static const slider_hw_config_t slider_configs[SLIDER_COUNT] = {
     ADC_CHANNEL_3  /* A2 - Slider 1 */ \
 }
 
-// Slider configuration (potentiometers use same backend as sliders)
+// Slider configuration (potentiometers use same backend as sliders)o
 #define SLIDER_COUNT 2
 #define SLIDER_ADC_PINS ADC_PINS
 

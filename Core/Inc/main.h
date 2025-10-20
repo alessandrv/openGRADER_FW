@@ -39,6 +39,11 @@ extern "C" {
 
 /* USER CODE END ET */
 
+/* Exported variables --------------------------------------------------------*/
+/* USER CODE BEGIN EV */
+extern ADC_HandleTypeDef hadc1;
+/* USER CODE END EV */
+
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
 

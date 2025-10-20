@@ -34,6 +34,9 @@ typedef struct {
 // Initialize slider subsystem
 void slider_init(void);
 
+// Initialize ADC1 (shared by sliders and magnetic switches)
+void adc_init(void);
+
 // Scan all sliders and send MIDI CC messages on change
 void slider_scan(void);
 

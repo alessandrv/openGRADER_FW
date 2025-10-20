@@ -23,13 +23,47 @@ static inline int abs_simple(int x)
     return (x >= 0) ? x : -x;
 }
 
+// ADC handle - used by both sliders and magnetic switches
+ADC_HandleTypeDef hadc1;
+
+/**
+ * @brief Initialize ADC1 for analog inputs (used by both sliders and magnetic switches)
+ */
+void adc_init(void)
+{
+    // Enable ADC clock
+    __HAL_RCC_ADC12_CLK_ENABLE();
+    
+    // Configure ADC
+    hadc1.Instance = ADC1;
+    hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+    hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+    hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+    hadc1.Init.LowPowerAutoWait = DISABLE;
+    hadc1.Init.ContinuousConvMode = DISABLE;
+    hadc1.Init.NbrOfConversion = 1;
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    hadc1.Init.DMAContinuousRequests = DISABLE;
+    hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+    hadc1.Init.OversamplingMode = DISABLE;
+    
+    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+        // Initialization Error
+        return;
+    }
+    
+    // Calibrate ADC
+    HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+}
+
 #if SLIDER_COUNT > 0
 
 // Slider state for each configured slider
 static slider_state_t slider_states[SLIDER_COUNT] = {0};
-
-// ADC handle
-static ADC_HandleTypeDef hadc1;
 
 // Last scan time for throttling
 static uint32_t last_scan_time = 0;
@@ -67,6 +101,9 @@ static uint16_t slider_moving_average(slider_state_t *state, uint16_t new_readin
  */
 void slider_init(void)
 {
+    // Initialize ADC (shared by sliders and magnetic switches)
+    adc_init();
+    
     // Enable GPIO clock for analog pins
     __HAL_RCC_GPIOA_CLK_ENABLE();
     
@@ -94,34 +131,6 @@ void slider_init(void)
             slider_states[i].readings[j] = 0;
         }
     }
-    
-    // Enable ADC clock
-    __HAL_RCC_ADC12_CLK_ENABLE();
-    
-    // Configure ADC
-    hadc1.Instance = ADC1;
-    hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-    hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-    hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-    hadc1.Init.LowPowerAutoWait = DISABLE;
-    hadc1.Init.ContinuousConvMode = DISABLE;
-    hadc1.Init.NbrOfConversion = 1;
-    hadc1.Init.DiscontinuousConvMode = DISABLE;
-    hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-    hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-    hadc1.Init.DMAContinuousRequests = DISABLE;
-    hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
-    hadc1.Init.OversamplingMode = DISABLE;
-    
-    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
-        // Initialization Error
-        return;
-    }
-    
-    // Calibrate ADC
-    HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 }
 
 /**
@@ -364,7 +373,10 @@ uint8_t slider_get_current_raw_value(uint8_t slider_id)
 #else // SLIDER_COUNT == 0
 
 // Stub implementations when no sliders are configured
-void slider_init(void) {}
+void slider_init(void) {
+    // Still initialize ADC for magnetic switches
+    adc_init();
+}
 void slider_scan(void) {}
 uint8_t slider_get_percent(uint8_t slider_id) { return 0; }
 uint8_t slider_get_midi_value(uint8_t slider_id) { return 0; }

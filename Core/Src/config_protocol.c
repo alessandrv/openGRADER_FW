@@ -3,6 +3,7 @@
 #include "input/keymap.h"
 #include "input/board_layout.h"
 #include "input/slider.h"
+#include "input/magnetic_switch.h"
 #include "i2c_manager.h"
 #include "i2c.h"  // Added to include hi2c2 declaration
 #include "pin_config.h"
@@ -45,6 +46,13 @@ static void handle_midi_cc(const config_packet_t *request, config_packet_t *resp
 static void handle_get_slider_value(const config_packet_t *request, config_packet_t *response);
 static void handle_get_slider_config(const config_packet_t *request, config_packet_t *response);
 static void handle_set_slider_config(const config_packet_t *request, config_packet_t *response);
+
+// Magnetic switch protocol handlers
+static void handle_get_magnetic_switch_value(const config_packet_t *request, config_packet_t *response);
+static void handle_get_magnetic_switch_config(const config_packet_t *request, config_packet_t *response);
+static void handle_set_magnetic_switch_config(const config_packet_t *request, config_packet_t *response);
+static void handle_calibrate_magnetic_switch(const config_packet_t *request, config_packet_t *response);
+static void handle_set_magnetic_switch_sensitivity(const config_packet_t *request, config_packet_t *response);
 static bool request_keymap_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t *keycode);
 static bool send_keymap_to_slave(uint8_t slave_addr, uint8_t layer, uint8_t row, uint8_t col, uint16_t keycode);
 static bool request_encoder_from_slave(uint8_t slave_addr, uint8_t layer, uint8_t encoder_id, uint16_t *ccw_keycode, uint16_t *cw_keycode);
@@ -587,6 +595,26 @@ bool config_protocol_process_packet(const config_packet_t *packet)
 
         case CMD_SET_SLIDER_CONFIG:
             handle_set_slider_config(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_GET_MAGNETIC_SWITCH_VALUE:
+            handle_get_magnetic_switch_value(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_GET_MAGNETIC_SWITCH_CONFIG:
+            handle_get_magnetic_switch_config(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_SET_MAGNETIC_SWITCH_CONFIG:
+            handle_set_magnetic_switch_config(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_CALIBRATE_MAGNETIC_SWITCH:
+            handle_calibrate_magnetic_switch(&rx_packet, &tx_packet);
+            break;
+
+        case CMD_SET_MAGNETIC_SWITCH_SENSITIVITY:
+            handle_set_magnetic_switch_sensitivity(&rx_packet, &tx_packet);
             break;
 
         case CMD_MIDI_SEND_RAW:
@@ -1190,6 +1218,180 @@ static void handle_set_slider_config(const config_packet_t *request, config_pack
     } else {
         response->status = STATUS_ERROR;
     }
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+// Magnetic switch protocol handlers
+static void handle_get_magnetic_switch_value(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t switch_id = request->payload[0];
+
+#if MAGNETIC_SWITCH_COUNT > 0
+    if (switch_id >= MAGNETIC_SWITCH_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint16_t raw_value = magnetic_switch_get_raw_value(switch_id);
+    uint8_t percentage = magnetic_switch_get_percentage(switch_id);
+
+    response->payload[0] = raw_value & 0xFF;
+    response->payload[1] = (raw_value >> 8) & 0xFF;
+    response->payload[2] = percentage;
+    response->payload_length = 3;
+    response->status = STATUS_OK;
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_get_magnetic_switch_config(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 1) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t switch_id = request->payload[0];
+
+#if MAGNETIC_SWITCH_COUNT > 0
+    if (switch_id >= MAGNETIC_SWITCH_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    // Get magnetic switch configuration
+    magnetic_switch_protocol_config_t *response_config = (magnetic_switch_protocol_config_t*)response->payload;
+    
+    // Get internal config (note: this assumes access to magnetic_switches array)
+    extern magnetic_switch_config_t magnetic_switches[MAX_MAGNETIC_SWITCHES];
+    
+    response_config->switch_id = switch_id;
+    response_config->unpressed_value = magnetic_switches[switch_id].unpressed_value;
+    response_config->pressed_value = magnetic_switches[switch_id].pressed_value;
+    response_config->sensitivity = magnetic_switches[switch_id].sensitivity;
+    response_config->is_calibrated = magnetic_switches[switch_id].is_calibrated;
+    response_config->keycode = magnetic_switches[switch_id].keycode;
+    response_config->reserved[0] = 0;
+    
+    response->payload_length = sizeof(magnetic_switch_protocol_config_t);
+    response->status = STATUS_OK;
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_set_magnetic_switch_config(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < sizeof(magnetic_switch_protocol_config_t)) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+#if MAGNETIC_SWITCH_COUNT > 0
+    magnetic_switch_protocol_config_t *config = (magnetic_switch_protocol_config_t*)request->payload;
+    
+    if (config->switch_id >= MAGNETIC_SWITCH_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    // Set magnetic switch configuration (note: this assumes access to magnetic_switches array)
+    extern magnetic_switch_config_t magnetic_switches[MAX_MAGNETIC_SWITCHES];
+    
+    magnetic_switches[config->switch_id].unpressed_value = config->unpressed_value;
+    magnetic_switches[config->switch_id].pressed_value = config->pressed_value;
+    magnetic_switches[config->switch_id].sensitivity = config->sensitivity;
+    magnetic_switches[config->switch_id].is_calibrated = config->is_calibrated;
+    magnetic_switches[config->switch_id].keycode = config->keycode;
+    
+    // Recalculate threshold
+    magnetic_switch_calculate_threshold(config->switch_id);
+    
+    response->status = STATUS_OK;
+    usb_app_cdc_printf("Config: Set magnetic switch %d config (unpressed:%d, pressed:%d, sensitivity:%d%%)\r\n", 
+                 config->switch_id, config->unpressed_value, config->pressed_value, config->sensitivity);
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_calibrate_magnetic_switch(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t switch_id = request->payload[0];
+    uint8_t step = request->payload[1];
+
+#if MAGNETIC_SWITCH_COUNT > 0
+    if (switch_id >= MAGNETIC_SWITCH_COUNT) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    switch (step) {
+        case 0: // Start calibration
+            magnetic_switch_start_calibration(switch_id);
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Started calibration for magnetic switch %d\r\n", switch_id);
+            break;
+            
+        case 1: // Set unpressed value
+            magnetic_switch_set_unpressed_value(switch_id);
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Set unpressed value for magnetic switch %d\r\n", switch_id);
+            break;
+            
+        case 2: // Set pressed value
+            magnetic_switch_set_pressed_value(switch_id);
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Set pressed value for magnetic switch %d\r\n", switch_id);
+            break;
+            
+        case 3: // Complete calibration
+            magnetic_switch_complete_calibration(switch_id);
+            response->status = STATUS_OK;
+            usb_app_cdc_printf("Config: Completed calibration for magnetic switch %d\r\n", switch_id);
+            break;
+            
+        default:
+            response->status = STATUS_INVALID_PARAM;
+            break;
+    }
+#else
+    response->status = STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static void handle_set_magnetic_switch_sensitivity(const config_packet_t *request, config_packet_t *response)
+{
+    if (request->payload_length < 2) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    uint8_t switch_id = request->payload[0];
+    uint8_t sensitivity = request->payload[1];
+
+#if MAGNETIC_SWITCH_COUNT > 0
+    if (switch_id >= MAGNETIC_SWITCH_COUNT || sensitivity > 100) {
+        response->status = STATUS_INVALID_PARAM;
+        return;
+    }
+
+    magnetic_switch_set_sensitivity(switch_id, sensitivity);
+    response->status = STATUS_OK;
+    usb_app_cdc_printf("Config: Set sensitivity for magnetic switch %d to %d%%\r\n", switch_id, sensitivity);
 #else
     response->status = STATUS_NOT_SUPPORTED;
 #endif

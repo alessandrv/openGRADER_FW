@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Include keyboard config to get magnetic switch definitions
+#ifdef KEYBOARD_CONFIG_HEADER
+    #include KEYBOARD_CONFIG_HEADER
+#endif
+
 // Maximum number of magnetic switches supported
 #define MAX_MAGNETIC_SWITCHES 8
 
@@ -20,7 +25,6 @@ typedef enum {
 
 // Magnetic switch configuration structure
 typedef struct {
-    ADC_TypeDef *adc;           // ADC instance (e.g., ADC1, ADC2)
     uint32_t channel;           // ADC channel number
     GPIO_TypeDef *gpio_port;    // GPIO port for the pin
     uint32_t gpio_pin;          // GPIO pin number
@@ -38,7 +42,11 @@ extern magnetic_switch_config_t magnetic_switches[MAX_MAGNETIC_SWITCHES];
 extern uint8_t magnetic_switch_count;
 
 // Function prototypes
+// Initialization
 void magnetic_switch_init(void);
+void magnetic_switch_setup_from_config(void);
+
+// Runtime functions
 void magnetic_switch_update(void);
 bool magnetic_switch_is_pressed(uint8_t switch_id);
 uint16_t magnetic_switch_get_raw_value(uint8_t switch_id);

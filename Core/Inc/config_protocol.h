@@ -52,7 +52,14 @@ typedef enum {
     CMD_GET_LAYOUT_CELL_COMPONENT_ID = 0x1A, // Get component ID at matrix position (payload: row(1), col(1))
     CMD_GET_SLIDER_VALUE = 0x1B,       // Get current slider value (payload: slider_id(1)) -> value(1)
     CMD_GET_SLIDER_CONFIG = 0x1C,      // Get slider configuration (payload: layer(1), slider_id(1)) -> config
-    CMD_SET_SLIDER_CONFIG = 0x1D       // Set slider configuration (payload: layer(1), slider_id(1), config)
+    CMD_SET_SLIDER_CONFIG = 0x1D,      // Set slider configuration (payload: layer(1), slider_id(1), config)
+    
+    // Magnetic switch commands
+    CMD_GET_MAGNETIC_SWITCH_VALUE = 0x1E,      // Get magnetic switch raw value and percentage
+    CMD_GET_MAGNETIC_SWITCH_CONFIG = 0x1F,     // Get magnetic switch configuration
+    CMD_SET_MAGNETIC_SWITCH_CONFIG = 0x20,     // Set magnetic switch configuration
+    CMD_CALIBRATE_MAGNETIC_SWITCH = 0x21,      // Calibrate magnetic switch (step-based)
+    CMD_SET_MAGNETIC_SWITCH_SENSITIVITY = 0x22 // Set magnetic switch sensitivity
 } config_command_t;
 
 // Response status codes
@@ -130,6 +137,17 @@ typedef struct {
     uint8_t max_midi_value;
     uint8_t reserved[2];
 } __attribute__((packed)) slider_config_t;
+
+// Magnetic switch configuration entry
+typedef struct {
+    uint8_t switch_id;
+    uint16_t unpressed_value;
+    uint16_t pressed_value;
+    uint8_t sensitivity;
+    bool is_calibrated;
+    uint16_t keycode;
+    uint8_t reserved[1];
+} __attribute__((packed)) magnetic_switch_protocol_config_t;
 
 // Public API functions
 void config_protocol_init(void);

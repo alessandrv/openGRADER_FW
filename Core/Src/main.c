@@ -41,6 +41,7 @@
 #include "input/encoder.h"
 #include "input/keymap.h"
 #include "input/slider.h"
+#include "input/magnetic_switch.h"
 #include "key_state.h"
 #include "op_keycodes.h"
 #include "pin_config.h"
@@ -165,6 +166,7 @@ int main(void)
   encoder_init();
   matrix_init();
   slider_init();
+  magnetic_switch_init();
   i2c_manager_init();
   
   // Initialize WS2812 LED strip
@@ -207,6 +209,7 @@ int main(void)
     matrix_scan();
     encoder_task();
     slider_scan();
+    magnetic_switch_update();
     key_state_task();
     
     // Check USB connection status periodically for master/slave switching
